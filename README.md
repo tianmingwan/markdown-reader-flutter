@@ -22,7 +22,9 @@ markdown-reader-flutter/
 │   ├── src/tree.rs          目录扫描 + 自然排序 + 子树大小（原样复用）
 │   ├── src/search.rs        全文搜索，中文安全（原样复用）
 │   └── src/session.rs       会话持久化（原样复用）
-├── native/                  构建产物 libmdreader_core.so（打进 bundle/lib）
+├── android/  windows/       Flutter 平台工程（库由 CI 构建时注入）
+├── .github/workflows/       三平台 CI + Release
+├── native/                  构建产物（.so/.dll，打进 bundle；不入库）
 ├── scripts/                 build-rust.sh / run.sh / test.sh
 └── test/                    Dart 测试
 ```
@@ -37,6 +39,9 @@ Flutter (Dart)  ──  UI：窗口 / 标签 / 文件树 / 虚拟滚动 / 主题
 Rust mdreader-core ── markdown 解析 / syntect 高亮 / 目录扫描 / 全文搜索 / 会话
 ```
 
+动态库按平台自动选择：Linux `libmdreader_core.so`、Windows `mdreader_core.dll`、
+macOS `libmdreader_core.dylib`；Android 交给系统从 APK 的 `lib/<abi>/` 解析。
+
 选择这条路线的原因（均为实测）：
 
 - **纯 Dart 重写解析层不可接受**：同一份 3.18MB 文档，Dart `package:markdown` AOT 解析耗时
@@ -47,13 +52,27 @@ Rust mdreader-core ── markdown 解析 / syntect 高亮 / 目录扫描 / 全�
 - **Flutter 不认 HTML**：因此 Rust 侧改为输出**结构化节点树**（块/内联两级 + 高亮 token），
   Dart 直接建 widget，省掉一次 HTML 解析。
 
-## 构建与运行
+## 平台与构建
+
+| 平台 | 产物 | 构建位置 |
+|---|---|---|
+| Linux x64 | `mdreader-flutter-linux-x64.tar.gz`（绿色包）/ deb | 本机或 CI |
+| Windows x64 | `mdreader-flutter-windows-x64.zip`（绿色包） | **仅 CI**（Linux 无法交叉编译 Flutter Windows 端） |
+| Android | `mdreader-flutter-android.apk`（含 arm64-v8a / armeabi-v7a / x86_64 / x86） | **仅 CI**（本机无 SDK/NDK） |
+
+三平台由 `.github/workflows/build.yml` 构建：推送 `main` 触发构建，打 `v*` 标签自动创建 Release 并附上全部产物。
 
 ```bash
-# 依赖：rustup + cargo、Flutter 3.47+（Linux 桌面工具链）
-./scripts/build-rust.sh     # 编译 Rust cdylib → native/
+# 本地（Linux）
+./scripts/build-rust.sh          # 编译 Rust cdylib → native/libmdreader_core.so
 flutter build linux --release
 ./build/linux/x64/release/bundle/mdreader_flutter
+
+# 一键
+./scripts/run.sh
+
+# 重新生成 Linux deb
+dpkg-deb --build --root-owner-group <debroot> dist/mdreader-flutter_0.1.0_amd64.deb
 ```
 
 一键：
