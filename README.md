@@ -58,7 +58,7 @@ macOS `libmdreader_core.dylib`；Android 交给系统从 APK 的 `lib/<abi>/` �
 |---|---|---|
 | Linux x64 | `mdreader-flutter-linux-x64.tar.gz`（绿色包）/ deb | 本机或 CI |
 | Windows x64 | `mdreader-flutter-windows-x64.zip`（绿色包） | **仅 CI**（Linux 无法交叉编译 Flutter Windows 端） |
-| Android | `mdreader-flutter-android.apk`（含 arm64-v8a / armeabi-v7a / x86_64 / x86） | **仅 CI**（本机无 SDK/NDK） |
+| Android | `mdreader-flutter-android.apk`（含 arm64-v8a / armeabi-v7a / x86_64） | **仅 CI**（本机无 SDK/NDK） |
 
 三平台由 `.github/workflows/build.yml` 构建：推送 `main` 触发构建，打 `v*` 标签自动创建 Release 并附上全部产物。
 

@@ -134,7 +134,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
       # 不用 taiki-e/install-action：它会在仓库根找 Cargo.toml 而本工程在 rust/core/，
       # 实测报 "Failed to load Cargo.toml in current directory"
@@ -153,13 +153,15 @@ jobs:
           fi
           cargo ndk --version
 
-      - name: 构建四 ABI 的 Rust core
+      - name: 构建三 ABI 的 Rust core
         run: |
           # cargo-ndk 会在“当前目录”找 Cargo.toml（--manifest-path 接不住），
           # 所以先进入 crate 目录再调用
           cd rust/core
+          # 只编 Flutter 实际支持的三个 ABI（Flutter 已不支持 32 位 x86，
+          # 编了也不会进 APK）
           cargo ndk \
-            -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 \
+            -t arm64-v8a -t armeabi-v7a -t x86_64 \
             -o ../../android/app/src/main/jniLibs \
             build --release
           find ../../android/app/src/main/jniLibs -type f | sort
