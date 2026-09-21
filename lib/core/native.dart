@@ -29,21 +29,32 @@ typedef _FreeC = Void Function(Pointer<Utf8>);
 typedef _FreeD = void Function(Pointer<Utf8>);
 
 class NativeCore {
-  static const _libName = 'libmdreader_core.so';
+  /// 各平台产物名：Linux/Android 为 .so，Windows 为 .dll，macOS 为 .dylib
+  static String get _libName {
+    if (Platform.isWindows) return 'mdreader_core.dll';
+    if (Platform.isMacOS) return 'libmdreader_core.dylib';
+    return 'libmdreader_core.so';
+  }
+
   static String? _cachedPath;
 
-  /// 动态库定位顺序：环境变量 → 可执行文件同级 lib/ → 工程 native/（开发期）。
+  /// 动态库定位顺序：环境变量 → 平台特例 → 可执行文件同级 → 工程 native/（开发期）。
   static String libPath() {
     if (_cachedPath != null) return _cachedPath!;
     final env = Platform.environment['MDREADER_CORE_SO'];
     if (env != null && env.isNotEmpty && File(env).existsSync()) {
       return _cachedPath = env;
     }
+    // Android：动态库随 APK 打在 lib/<abi>/ 下，交给系统按名字解析
+    if (Platform.isAndroid) return _cachedPath = _libName;
+
     final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final nativeDir = '${Directory.current.path}/native';
     final candidates = <String>[
-      '$exeDir/lib/$_libName',
-      '$exeDir/$_libName',
-      '${Directory.current.path}/native/$_libName',
+      '$exeDir/lib/$_libName', // Linux bundle
+      '$exeDir/$_libName', // Windows bundle（exe 同级）
+      '$exeDir/data/flutter_assets/$_libName',
+      '$nativeDir/$_libName', // 开发期
       '${Directory.current.path}/../native/$_libName',
     ];
     for (final c in candidates) {

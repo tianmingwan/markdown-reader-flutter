@@ -1,0 +1,171 @@
+name: Build & Release
+
+# 三平台构建：Linux / Windows / Android
+# 本机是 Linux，Flutter 的 Windows 端无法交叉编译、Android 缺 SDK/NDK，
+# 所以 Windows 与 Android 产物统一在 CI 上构建。
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: '3.47.2'
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ---------------------------------------------------------------- Linux
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Linux 构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libblkid-dev liblzma-dev \
+            ninja-build cmake pkg-config libglu1-mesa
+
+      - name: 构建 Rust core
+        run: ./scripts/build-rust.sh
+
+      - name: 构建 Flutter（Linux）
+        run: flutter build linux --release
+
+      - name: 打包 tar.gz
+        run: |
+          cd build/linux/x64/release/bundle
+          tar czf "$GITHUB_WORKSPACE/mdreader-flutter-linux-x64.tar.gz" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: mdreader-flutter-linux-x64.tar.gz
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- Windows
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 构建 Rust core（windows-msvc）
+        shell: bash
+        run: |
+          mkdir -p native
+          cargo build --release --manifest-path rust/core/Cargo.toml
+          cp rust/core/target/release/mdreader_core.dll native/
+          ls -la native/
+
+      - name: 构建 Flutter（Windows）
+        run: flutter build windows --release
+
+      - name: 打包 zip
+        shell: bash
+        run: |
+          cd build/windows/x64/runner/Release
+          7z a "$GITHUB_WORKSPACE/mdreader-flutter-windows-x64.zip" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: mdreader-flutter-windows-x64.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- Android
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 安装 NDK 与编译工具
+        run: |
+          sdkmanager --install "ndk;27.0.12077973" "platforms;android-36" \
+            "build-tools;36.0.0" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
+
+      - name: 安装 cargo-ndk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
+      - name: 构建四 ABI 的 Rust core
+        run: |
+          cargo ndk \
+            -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 \
+            -o android/app/src/main/jniLibs \
+            build --release --manifest-path rust/core/Cargo.toml
+          find android/app/src/main/jniLibs -type f | sort
+
+      - name: 构建 Flutter（Android APK）
+        run: flutter build apk --release
+
+      - name: 收集 APK
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk \
+             mdreader-flutter-android.apk
+          ls -la mdreader-flutter-android.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: mdreader-flutter-android.apk
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- Release
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: 汇总产物
+        run: find dist -type f | sort
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/**/*.tar.gz
+            dist/**/*.zip
+            dist/**/*.apk
+          generate_release_notes: true
