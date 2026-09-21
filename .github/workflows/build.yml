@@ -49,10 +49,17 @@ jobs:
           cd build/linux/x64/release/bundle
           tar czf "$GITHUB_WORKSPACE/mdreader-flutter-linux-x64.tar.gz" .
 
+      - name: 生成 deb 安装包
+        run: |
+          VER="${{ github.ref_type == 'tag' && github.ref_name || '0.1.0' }}"
+          ./scripts/build-deb.sh "${VER#v}"
+
       - uses: actions/upload-artifact@v4
         with:
           name: linux-x64
-          path: mdreader-flutter-linux-x64.tar.gz
+          path: |
+            mdreader-flutter-linux-x64.tar.gz
+            dist/*.deb
           if-no-files-found: error
 
   # ---------------------------------------------------------------- Windows
@@ -186,4 +193,5 @@ jobs:
             dist/**/*.tar.gz
             dist/**/*.zip
             dist/**/*.apk
+            dist/**/*.deb
           generate_release_notes: true
