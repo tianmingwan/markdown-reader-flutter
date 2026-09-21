@@ -129,10 +129,20 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android,i686-linux-android
 
-      - name: 安装 cargo-ndk
-        uses: taiki-e/install-action@v2
+      # 不用 taiki-e/install-action：它会在仓库根找 Cargo.toml 而本工程在 rust/core/，
+      # 实测报 "Failed to load Cargo.toml in current directory"
+      - name: 缓存 cargo-ndk 构建
+        uses: actions/cache@v4
         with:
-          tool: cargo-ndk
+          path: ~/.cargo/bin/cargo-ndk
+          key: cargo-ndk-${{ runner.os }}-v3
+
+      - name: 安装 cargo-ndk
+        run: |
+          if ! command -v cargo-ndk >/dev/null 2>&1; then
+            cargo install cargo-ndk --locked
+          fi
+          cargo ndk --version
 
       - name: 构建四 ABI 的 Rust core
         run: |
