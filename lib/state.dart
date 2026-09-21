@@ -1,9 +1,10 @@
 // 应用状态：文件夹、标签、主题、字号、排序、会话、搜索。
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui' show PlatformDispatcher;
+import 'dart:ui' show PlatformDispatcher, AppExitResponse;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'core/models.dart';
 import 'core/native.dart';
@@ -31,6 +32,8 @@ class TabItem {
 }
 
 class AppState extends ChangeNotifier {
+  AppLifecycleListener? _lifecycle;
+
   String? root;
   TreeData? tree;
   bool scanning = false;
@@ -65,7 +68,19 @@ class AppState extends ChangeNotifier {
 
   // ------------------------------------------------------------ 启动
 
+  /// 关窗口/退出时兜底把会话写盘。
+  /// 否则「滚动停止 → 400ms 防抖 → 800ms 防抖」这 1.2 秒内关窗会丢掉最后的位置。
+  void _installExitHook() {
+    _lifecycle ??= AppLifecycleListener(
+      onExitRequested: () async {
+        await flush();
+        return AppExitResponse.exit;
+      },
+    );
+  }
+
   Future<void> boot() async {
+    _installExitHook();
     try {
       session = NativeCore.loadSession(NativeCore.configDir());
       themeMode = switch (session.theme) {
@@ -434,6 +449,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _saveTimer?.cancel();
+    _lifecycle?.dispose();
     super.dispose();
   }
 }

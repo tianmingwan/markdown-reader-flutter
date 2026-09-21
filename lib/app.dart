@@ -451,6 +451,7 @@ class _ReadViewState extends State<ReadView> {
   final ScrollController _ctl = ScrollController();
   String? _restoredFor;
   Timer? _saveTimer;
+  bool _restoring = false;
 
   @override
   void initState() {
@@ -500,19 +501,74 @@ class _ReadViewState extends State<ReadView> {
     _ctl.jumpTo(target);
   }
 
+  /// 恢复滚动位置。
+  ///
+  /// 不能用「比例 × 首帧 maxScrollExtent」一次跳到位：ListView 是不定高列表，
+  /// 首帧的 maxScrollExtent 只是**按可见项估算**的总高，实测比稳定值低约 26%
+  /// （法律 2082 题：首帧 1,137,267 → 稳定 1,546,197），
+  /// 于是 50% 的位置会落到 36.8% 处——文档越深偏得越多。
+  /// 这里改为多轮收敛：每轮用**当前最新的** maxScrollExtent 重跳同一比例，
+  /// 随着列表测量到的项越来越多，max 收敛，落点也随之收敛。
   void _restore() {
-    if (!_ctl.hasClients) return;
+    final dbg = Platform.environment['MDREADER_DEBUG'] == '1';
+    if (!_ctl.hasClients) {
+      if (dbg) print('[restore] 取消：无客户端');
+      return;
+    }
     if (_restoredFor == widget.tab.path) return;
     _restoredFor = widget.tab.path;
     final ratio = widget.tab.scrollRatio;
-    if (ratio > 0.001) {
-      final max = _ctl.position.maxScrollExtent;
-      if (max > 0) _ctl.jumpTo(max * ratio);
+    if (ratio <= 0.001) {
+      if (dbg) print('[restore] 比例为 0，留在顶部');
+      return;
+    }
+    if (dbg) {
+      print('[restore] ratio=$ratio firstMax=${_ctl.position.maxScrollExtent}');
+    }
+    _restoreConverge(ratio);
+  }
+
+  Future<void> _restoreConverge(double ratio) async {
+    final dbg = Platform.environment['MDREADER_DEBUG'] == '1';
+    _restoring = true;
+    try {
+      var lastMax = 0.0;
+      for (var pass = 0; pass < 6; pass++) {
+        if (!_ctl.hasClients || !mounted) return;
+        final max = _ctl.position.maxScrollExtent;
+        if (max <= 0) {
+          await Future<void>.delayed(const Duration(milliseconds: 60));
+          continue;
+        }
+        // 总高已稳定（变化 <0.5%）即认为落点收敛，不必再等
+        if (lastMax > 0 && (max - lastMax).abs() / max < 0.005) break;
+        lastMax = max;
+        final target = (max * ratio).clamp(0.0, max);
+        _ctl.jumpTo(target);
+        if (dbg && pass == 0) print('[restore] 第 1 轮 jumpTo=$target (max=$max)');
+        await Future<void>.delayed(const Duration(milliseconds: 90));
+      }
+      // 循环退出时总高可能刚又变了一点，等布局稳定后做最后一次校正
+      await Future<void>.delayed(const Duration(milliseconds: 160));
+      if (_ctl.hasClients && mounted) {
+        final m = _ctl.position.maxScrollExtent;
+        if (m > 0) _ctl.jumpTo((m * ratio).clamp(0.0, m));
+      }
+    } finally {
+      _restoring = false;
+      if (dbg && _ctl.hasClients) {
+        final m = _ctl.position.maxScrollExtent;
+        print('[restore] 收敛后 offset=${_ctl.offset} max=$m '
+            'realRatio=${(_ctl.offset / (m <= 0 ? 1 : m)).toStringAsFixed(4)} '
+            '（期望 $ratio）');
+      }
     }
   }
 
   void _onScroll() {
     if (!_ctl.hasClients) return;
+    // 恢复过程中列表会边跳边修正高度，此时写回会把中间态当成用户位置
+    if (_restoring) return;
     final max = _ctl.position.maxScrollExtent;
     final ratio = max <= 0 ? 0.0 : (_ctl.offset / max).clamp(0.0, 1.0);
     widget.tab.scrollRatio = ratio;
