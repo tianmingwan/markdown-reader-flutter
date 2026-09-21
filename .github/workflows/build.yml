@@ -155,11 +155,14 @@ jobs:
 
       - name: 构建四 ABI 的 Rust core
         run: |
+          # cargo-ndk 会在“当前目录”找 Cargo.toml（--manifest-path 接不住），
+          # 所以先进入 crate 目录再调用
+          cd rust/core
           cargo ndk \
             -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 \
-            -o android/app/src/main/jniLibs \
-            build --release --manifest-path rust/core/Cargo.toml
-          find android/app/src/main/jniLibs -type f | sort
+            -o ../../android/app/src/main/jniLibs \
+            build --release
+          find ../../android/app/src/main/jniLibs -type f | sort
 
       - name: 构建 Flutter（Android APK）
         run: flutter build apk --release
