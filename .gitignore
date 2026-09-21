@@ -1,0 +1,19 @@
+# ---- Flutter / Dart ----
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.idea/
+*.iml
+build/
+linux/flutter/ephemeral/
+
+# ---- Rust ----
+rust/core/target/
+
+# ---- 构建产物（由 scripts/build-rust.sh 重新生成）----
+native/*.so
+dist/
+
+# ---- 杂项 ----
+*.log
+.DS_Store

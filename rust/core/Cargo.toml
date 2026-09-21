@@ -1,0 +1,18 @@
+[package]
+name = "mdreader-core"
+version = "0.2.4"
+edition = "2021"
+description = "markdown阅读器核心逻辑（无 Tauri 依赖，可独立单元测试）"
+
+[lib]
+name = "mdreader_core"
+path = "src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+syntect = "5"
+ignore = "0.4"
+percent-encoding = "2"
