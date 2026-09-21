@@ -62,6 +62,15 @@ macOS `libmdreader_core.dylib`；Android 交给系统从 APK 的 `lib/<abi>/` �
 
 三平台由 `.github/workflows/build.yml` 构建：推送 `main` 触发构建，打 `v*` 标签自动创建 Release 并附上全部产物。
 
+**已发布版本**：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.1.0>
+
+| 附件 | 大小 |
+|---|---|
+| `mdreader-flutter_0.1.0_amd64.deb` | 9.6 MB（`sudo dpkg -i` 安装，带菜单项与图标） |
+| `mdreader-flutter-linux-x64.tar.gz` | 11.8 MB（解压即用） |
+| `mdreader-flutter-windows-x64.zip` | 13.2 MB（解压即用，含 `mdreader_core.dll`） |
+| `mdreader-flutter-android.apk` | 61.7 MB（三 ABI；如需减小体积可拆成 per-ABI 包） |
+
 ```bash
 # 本地（Linux）
 ./scripts/build-rust.sh          # 编译 Rust cdylib → native/libmdreader_core.so
