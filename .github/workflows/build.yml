@@ -147,7 +147,9 @@ jobs:
       - name: 安装 cargo-ndk
         run: |
           if ! command -v cargo-ndk >/dev/null 2>&1; then
-            cargo install cargo-ndk --locked
+            # 不能加 --locked：cargo 会因此去读“当前目录”的 Cargo.lock，
+            # 而 Rust 工程在 rust/core/，仓库根没有 Cargo.toml → 报 Failed to load Cargo.toml
+            cargo install cargo-ndk
           fi
           cargo ndk --version
 
