@@ -25,6 +25,17 @@ class CloseSearchIntent extends Intent {
   const CloseSearchIntent();
 }
 
+/// 过滤掉系统/第三方塞进选中菜单的「文本处理」项。
+///
+/// 安卓上 `ACTION_PROCESS_TEXT` 的处理器（联想 ROM 的"智能识别"、爱奇艺搜索、
+/// 朗读、在 Via 中搜索、搜视频…）会被 Flutter 以 `ContextMenuButtonType.custom`
+/// 的形式并进选中菜单。用户只想用内置 DeepSeek，所以这些一律不显示。
+/// 复制 / 分享 / 全选这类内置动作（类型不是 custom）保持原样。
+List<ContextMenuButtonItem> filteredSelectionMenuItems(
+  List<ContextMenuButtonItem> items,
+) =>
+    items.where((b) => b.type != ContextMenuButtonType.custom).toList();
+
 /// Ctrl+Shift+A：开关右侧 AI 搜索分栏
 class ToggleAiIntent extends Intent {
   const ToggleAiIntent();
@@ -782,10 +793,10 @@ class _ReadViewState extends State<ReadView> {
         final has = picked.trim().isNotEmpty;
         return AdaptiveTextSelectionToolbar.buttonItems(
           anchors: region.contextMenuAnchors,
-          // 顺序很关键：ROM 会往这条工具栏后面塞一堆它自己的项，把我们的放到
-          // 系统默认项（复制/分享/全选）之后，才落在可视区里而不是被裁在左端。
+          // 第三方/ROM 的「文本处理」项已由 filteredSelectionMenuItems 去掉，
+          // 剩下的顺序是：复制/分享/全选 → 我们的两项。
           buttonItems: <ContextMenuButtonItem>[
-            ...region.contextMenuButtonItems,
+            ...filteredSelectionMenuItems(region.contextMenuButtonItems),
             if (has) ...[
               ContextMenuButtonItem(
                 label: '问 DeepSeek',

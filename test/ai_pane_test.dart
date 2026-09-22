@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mdreader_flutter/ai/ai_pane.dart';
+import 'package:mdreader_flutter/app.dart' show filteredSelectionMenuItems;
 import 'package:mdreader_flutter/ai/ai_types.dart';
 import 'package:mdreader_flutter/core/ai_panel_native.dart';
 import 'package:mdreader_flutter/state.dart';
@@ -169,6 +170,34 @@ void main() {
         (_) {},
       );
       expect(promptOk, isFalse);
+    });
+  });
+
+  group('选中菜单过滤（去掉 ROM/第三方的"文本处理"项）', () {
+    test('只留内置动作，爱奇艺搜索/朗读这类 custom 项被丢掉', () {
+      final items = <ContextMenuButtonItem>[
+        ContextMenuButtonItem(
+            onPressed: () {}, type: ContextMenuButtonType.copy),
+        ContextMenuButtonItem(
+            onPressed: () {}, type: ContextMenuButtonType.share),
+        ContextMenuButtonItem(
+            onPressed: () {}, type: ContextMenuButtonType.selectAll),
+        // 平台 ACTION_PROCESS_TEXT 处理器：Flutter 给它们的是 custom 类型
+        ContextMenuButtonItem(label: '爱奇艺搜索', onPressed: () {}),
+        ContextMenuButtonItem(label: 'AI搜索', onPressed: () {}),
+        ContextMenuButtonItem(label: '朗读', onPressed: () {}),
+        ContextMenuButtonItem(label: '在 Via 中搜索', onPressed: () {}),
+        ContextMenuButtonItem(label: '搜视频(推荐)', onPressed: () {}),
+      ];
+      final kept = filteredSelectionMenuItems(items);
+      expect(kept.length, 3);
+      expect(
+        kept.every((b) => b.type != ContextMenuButtonType.custom),
+        isTrue,
+      );
+      for (final bad in ['爱奇艺搜索', 'AI搜索', '朗读', '在 Via 中搜索', '搜视频(推荐)']) {
+        expect(kept.any((b) => b.label == bad), isFalse, reason: '$bad 不该出现');
+      }
     });
   });
 
