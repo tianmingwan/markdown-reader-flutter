@@ -32,6 +32,16 @@ class TabItem {
   });
 }
 
+/// 「问 AI」请求：把这段文字送进内置 DeepSeek 面板
+class AiAsk {
+  final String text;
+
+  /// true = 开新对话并直接提问（内容放进去就发送）；false = 只放进输入框
+  final bool submit;
+
+  const AiAsk(this.text, {required this.submit});
+}
+
 class AppState extends ChangeNotifier {
   AppLifecycleListener? _lifecycle;
 
@@ -86,6 +96,31 @@ class AppState extends ChangeNotifier {
   /// 永远盖在 Flutter 之上，所以浮层弹出时必须先把网页藏起来，否则菜单会被盖住。
   /// 初始为 1：home 路由本身占一层，>1 才说明有浮层。
   int overlayDepth = 1;
+
+  /// 待处理的「问 AI」请求：选中内容 → 内置 DeepSeek 面板。
+  /// [submit] = true 表示开新对话并直接提问（把内容放进去就发出去），
+  /// false 表示只把内容放进新对话的输入框，由用户自己改完再发。
+  AiAsk? aiPendingAsk;
+
+  /// 把一段文字送进内置 AI 面板（必要时自动打开面板）。
+  void askAi(String text, {required bool submit}) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+    aiPendingAsk = AiAsk(trimmed, submit: submit);
+    if (!aiOpen) {
+      aiOpen = true;
+      session.aiPanelOpen = true;
+      _scheduleSave();
+    }
+    notifyListeners();
+  }
+
+  /// 面板取走待处理请求（取走后置空，避免重复发送）
+  AiAsk? takePendingAsk() {
+    final a = aiPendingAsk;
+    aiPendingAsk = null;
+    return a;
+  }
 
   /// 安卓「所有文件访问」授权状态（null = 非安卓 / 未知）。
   /// Flutter 版把目录当普通路径交给 Rust 扫描，没这个权限就扫不到 .md。

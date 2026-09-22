@@ -119,12 +119,23 @@ class AiPanelNative {
     } catch (_) {}
   }
 
-  /// 把文本填进 DeepSeek 提问框；返回 false 表示面板还没建好或原生不支持。
-  static Future<bool> prompt(String text) async {
+  /// 把文本填进 DeepSeek 提问框。
+  ///
+  /// [submit] 为 true 时填完直接发送（"新对话 + 直接提问"）；
+  /// [newChat] 为 true 时先回到聊天根路径开一个新对话，再补填。
+  /// 返回 false 表示面板还没建好或原生不支持。
+  static Future<bool> prompt(
+    String text, {
+    bool submit = false,
+    bool newChat = false,
+  }) async {
     if (!platformSupported || text.trim().isEmpty) return false;
     try {
-      final ok = await channel
-          .invokeMethod<bool>('prompt', <String, Object?>{'text': text});
+      final ok = await channel.invokeMethod<bool>('prompt', <String, Object?>{
+        'text': text,
+        if (submit) 'submit': true,
+        if (newChat) 'newChat': true,
+      });
       return ok == true;
     } catch (_) {
       return false;

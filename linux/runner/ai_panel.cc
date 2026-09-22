@@ -82,6 +82,39 @@ std::string BuildFillScript(const std::string& text) {
          "return true;}catch(e){return false;}})();";
 }
 
+// 把已填好的提问发出去（"新对话 + 直接提问"用）：DeepSeek 的输入框按 Enter 即发送
+// （Shift+Enter 才是换行），所以派发一组 Enter 键盘事件；找不到 textarea 时退而点发送按钮。
+std::string BuildSubmitScript() {
+  // 优先点真实的发送按钮：合成 Enter 事件 DeepSeek 的 React 不吃（真机实测）；
+  // 找不到按钮再退回合成 Enter。几何筛选用于避开输入框左边的「深度思考/智能搜索」。
+  return R"JS(
+(function(){
+  try{
+    var el=document.querySelector('textarea:not([readonly]):not([disabled])')||document.querySelector('div[contenteditable="true"]');
+    if(!el)return false;el.focus();
+    var sels=['button[type="submit"]','[data-testid*="send" i]','button[aria-label*="发送"]','button[aria-label*="Send" i]','[role="button"][aria-label*="发送"]','[role="button"][aria-label*="Send" i]'];
+    var btn=null,i;
+    for(i=0;i<sels.length&&!btn;i++){btn=document.querySelector(sels[i]);}
+    if(!btn){
+      var box=el.closest('form')||el.parentElement;
+      for(var up=0;up<4&&box&&!btn;up++){
+        var nodes=box.querySelectorAll('button,[role="button"]'),br=box.getBoundingClientRect();
+        for(var k=nodes.length-1;k>=0;k--){
+          var n=nodes[k];
+          if(n.disabled)continue;
+          var r=n.getBoundingClientRect();
+          if(r.width>0&&r.left>br.left+br.width*0.6&&n.querySelector('svg')){btn=n;break;}
+        }
+        box=box.parentElement;
+      }
+    }
+    if(btn){btn.click();return true;}
+    ['keydown','keypress','keyup'].forEach(function(t){el.dispatchEvent(new KeyboardEvent(t,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));});
+    return true;
+  }catch(e){return false;}
+})();)JS";
+}
+
 FlValue* Arg(FlValue* args, const char* key) {
   if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
     return nullptr;
@@ -201,7 +234,7 @@ void AiPanel::HandleMethodCall(FlMethodCall* method_call) {
     height_ = static_cast<int>(ArgNum(args, "h", height_));
     SetPaneVisible(true);
     const std::string prompt = ArgStr(args, "prompt", "");
-    if (!prompt.empty()) SetPendingPrompt(prompt);
+    if (!prompt.empty()) SetPendingPrompt(prompt, false);
     fl_method_call_respond(method_call, OkBool(true), nullptr);
     return;
   }
@@ -237,7 +270,12 @@ void AiPanel::HandleMethodCall(FlMethodCall* method_call) {
       fl_method_call_respond(method_call, OkBool(false), nullptr);
       return;
     }
-    SetPendingPrompt(text);
+    SetPendingPrompt(text, ArgBool(args, "submit", false));
+    if (ArgBool(args, "newChat", false)) {
+      // 回到聊天根路径 = 开一个新对话；pending 会在加载完成后自动补填
+      page_ready_ = false;
+      webkit_web_view_load_uri(WEBKIT_WEB_VIEW(webview_), kDefaultUrl);
+    }
     fl_method_call_respond(method_call, OkBool(true), nullptr);
     return;
   }
@@ -415,8 +453,9 @@ void AiPanel::SetPaneVisible(bool visible) {
 
 // ---------------------------------------------------------------- 注入
 
-void AiPanel::SetPendingPrompt(const std::string& text) {
+void AiPanel::SetPendingPrompt(const std::string& text, bool submit) {
   pending_prompt_ = text;
+  pending_submit_ = submit;
   inject_attempts_ = 0;
   InjectPending();
 }
@@ -442,10 +481,20 @@ void AiPanel::InjectNow() {
           filled = jsc_value_to_boolean(value);
         }
         if (filled) {
+          const bool submit = self->pending_submit_;
           self->pending_prompt_.clear();
+          self->pending_submit_ = false;
           self->inject_attempts_ = 0;
+          if (submit) {
+            // "新对话 + 直接提问"：填完就把消息发出去
+            webkit_web_view_evaluate_javascript(
+                WEBKIT_WEB_VIEW(self->webview_),
+                BuildSubmitScript().c_str(), -1, nullptr, nullptr, nullptr,
+                nullptr, nullptr);
+          }
           FlValue* m = fl_value_new_map();
           fl_value_set_string_take(m, "ok", fl_value_new_bool(true));
+          fl_value_set_string_take(m, "submitted", fl_value_new_bool(submit));
           self->Emit("promptResult", m);
           return;
         }
@@ -492,7 +541,10 @@ void AiPanel::EmitLoadState(const char* state, const char* uri,
   (void)uri;
   (void)error;
 }
-void AiPanel::SetPendingPrompt(const std::string& text) { (void)text; }
+void AiPanel::SetPendingPrompt(const std::string& text, bool submit) {
+  (void)text;
+  (void)submit;
+}
 void AiPanel::InjectPending() {}
 void AiPanel::InjectNow() {}
 

@@ -775,6 +775,36 @@ class _ReadViewState extends State<ReadView> {
       // 包在阅读区外层（而不是逐块 SelectableText）才能跨块连选整道题。
       onSelectionChanged: (content) =>
           widget.state.setSelection(content?.plainText),
+      // 选中菜单里直接给出「问内置 DeepSeek」两个动作，省得再去找面板按钮
+      contextMenuBuilder: (context, region) {
+        // getSelectedContent() 不是公开 API，用我们自己捕获的选区（onSelectionChanged）
+        final picked = widget.state.selectionText ?? '';
+        final has = picked.trim().isNotEmpty;
+        return AdaptiveTextSelectionToolbar.buttonItems(
+          anchors: region.contextMenuAnchors,
+          // 顺序很关键：ROM 会往这条工具栏后面塞一堆它自己的项，把我们的放到
+          // 系统默认项（复制/分享/全选）之后，才落在可视区里而不是被裁在左端。
+          buttonItems: <ContextMenuButtonItem>[
+            ...region.contextMenuButtonItems,
+            if (has) ...[
+              ContextMenuButtonItem(
+                label: '问 DeepSeek',
+                onPressed: () {
+                  region.hideToolbar();
+                  widget.state.askAi(picked, submit: true);
+                },
+              ),
+              ContextMenuButtonItem(
+                label: '放进 DeepSeek',
+                onPressed: () {
+                  region.hideToolbar();
+                  widget.state.askAi(picked, submit: false);
+                },
+              ),
+            ],
+          ],
+        );
+      },
       child: Center(
         child: ListView.builder(
           controller: _ctl,

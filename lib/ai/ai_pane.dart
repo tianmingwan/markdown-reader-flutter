@@ -87,7 +87,10 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
       AiWebView.onLoadChanged = _onLoadChanged;
       AiWebView.onPromptResult = _onPromptResult;
       // 平台视图不需要等布局，直接建
-      WidgetsBinding.instance.addPostFrameCallback((_) => _ensureInAppWebView());
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _ensureInAppWebView();
+        _consumePendingAsk();
+      });
       return;
     }
     if (_isNative) {
@@ -137,6 +140,47 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
     if (_isNative) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _syncNative());
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _consumePendingAsk());
+  }
+
+  /// 处理"选中内容 → 内置 AI"的请求（由 AppState.askAi 投递）。
+  ///
+  /// 两种语义：submit=true 开新对话并直接提问；false 只把内容放进新对话输入框。
+  Future<void> _consumePendingAsk() async {
+    if (!mounted) return;
+    final ask = s.takePendingAsk();
+    if (ask == null) return;
+
+    if (_backend == AiBackendKind.inAppWebView) {
+      AiWebView.ensure(kDeepSeekUrl);
+      // 新对话要先导航，填内容由 webview 在 onPageFinished 后补上
+      AiWebView.askInNewChat(ask.text, submit: ask.submit);
+      s.showToast(
+        ask.submit ? '已在新对话里提问…' : '已把内容放进新对话的输入框',
+        duration: const Duration(seconds: 4),
+      );
+      return;
+    }
+
+    if (_backend == AiBackendKind.external) {
+      Clipboard.setData(ClipboardData(text: ask.text));
+      s.showToast('本平台不支持内嵌面板，已复制内容到剪贴板');
+      return;
+    }
+
+    // Linux：原生侧会排队，页面加载完自动填入（submit 时再自动发送）
+    final ok = await AiPanelNative.prompt(ask.text,
+        submit: ask.submit, newChat: true);
+    if (!mounted) return;
+    if (!ok) {
+      // 原生面板还没建好：放回去，等 open 成功后重试
+      s.aiPendingAsk ??= ask;
+      return;
+    }
+    s.showToast(
+      ask.submit ? '已在新对话里提问…' : '已把内容放进新对话的输入框',
+      duration: const Duration(seconds: 4),
+    );
   }
 
   // ---------------------------------------------------------- 应用内 WebView
@@ -201,6 +245,8 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
         _unsupported = false;
         _loadState = 'loading';
       });
+      // 面板建好了才能把"问 AI"请求交给原生
+      WidgetsBinding.instance.addPostFrameCallback((_) => _consumePendingAsk());
     } else if (_lastSentRect != rect) {
       _lastSentRect = rect;
       await AiPanelNative.setBounds(rect);
@@ -444,6 +490,18 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
       icon: const Icon(Icons.more_vert, size: 15),
       onSelected: (v) {
         switch (v) {
+          case 'ask':
+            final sel = s.selectionText;
+            if (sel != null && sel.trim().isNotEmpty) {
+              s.askAi(sel, submit: true);
+            }
+            break;
+          case 'insert':
+            final sel = s.selectionText;
+            if (sel != null && sel.trim().isNotEmpty) {
+              s.askAi(sel, submit: false);
+            }
+            break;
           case 'zoom-in':
             _zoomBy(0.1);
             break;
@@ -458,13 +516,34 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
             break;
         }
       },
-      itemBuilder: (_) => const [
-        PopupMenuItem(value: 'zoom-in', child: Text('放大网页')),
-        PopupMenuItem(value: 'zoom-out', child: Text('缩小网页')),
-        PopupMenuItem(value: 'external', child: Text('在系统浏览器打开')),
-        PopupMenuDivider(),
-        PopupMenuItem(value: 'clear', child: Text('清除登录状态并刷新')),
-      ],
+      itemBuilder: (_) {
+        final sel = s.selectionText;
+        final has = sel != null && sel.trim().isNotEmpty;
+        final preview = has
+            ? (sel.replaceAll(RegExp(r'\s+'), ' ').trim().length <= 14
+                ? sel
+                : '${sel.replaceAll(RegExp(r'\s+'), ' ').trim().substring(0, 14)}…')
+            : '';
+        return [
+          PopupMenuItem(
+            value: 'ask',
+            enabled: has,
+            child: Text(has ? '新对话 + 直接提问（$preview）' : '新对话 + 直接提问（先选中文字）'),
+          ),
+          PopupMenuItem(
+            value: 'insert',
+            enabled: has,
+            child:
+                Text(has ? '新对话 + 只放进输入框（$preview）' : '新对话 + 只放进输入框（先选中文字）'),
+          ),
+          const PopupMenuDivider(),
+          const PopupMenuItem(value: 'zoom-in', child: Text('放大网页')),
+          const PopupMenuItem(value: 'zoom-out', child: Text('缩小网页')),
+          const PopupMenuItem(value: 'external', child: Text('在系统浏览器打开')),
+          const PopupMenuDivider(),
+          const PopupMenuItem(value: 'clear', child: Text('清除登录状态并刷新')),
+        ];
+      },
     );
   }
 

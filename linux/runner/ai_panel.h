@@ -49,8 +49,9 @@ class AiPanel {
   // 向 Dart 汇报页面加载状态：started / finished / failed / crashed
   void EmitLoadState(const char* state, const char* uri, const char* error);
 
-  // 把文本填进 DeepSeek 输入框。页面没就绪时挂起，加载完成后补填。
-  void SetPendingPrompt(const std::string& text);
+  // 把文本填进 DeepSeek 输入框；submit=true 时填完直接发送（"新对话 + 直接提问"）。
+  // 页面没就绪时挂起，加载完成后补填。
+  void SetPendingPrompt(const std::string& text, bool submit);
   void InjectPending();
   void InjectNow();
 
@@ -68,6 +69,7 @@ class AiPanel {
   bool page_ready_ = false;
 
   std::string pending_prompt_;
+  bool pending_submit_ = false;
   int inject_attempts_ = 0;
 };
 

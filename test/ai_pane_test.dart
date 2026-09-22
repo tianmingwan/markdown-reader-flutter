@@ -46,12 +46,16 @@ Widget hostPane(
   AiBackendKind? backend,
 }) =>
     MaterialApp(
+      // 真实应用里面板在 ListenableBuilder 里（state 一变就重建），测试保持一致
       home: Scaffold(
-        body: Row(
-          children: [
-            const Expanded(child: SizedBox()),
-            AiPane(state: s, width: width, backendOverride: backend),
-          ],
+        body: ListenableBuilder(
+          listenable: s,
+          builder: (context, _) => Row(
+            children: [
+              const Expanded(child: SizedBox()),
+              AiPane(state: s, width: width, backendOverride: backend),
+            ],
+          ),
         ),
       ),
     );
@@ -165,6 +169,40 @@ void main() {
         (_) {},
       );
       expect(promptOk, isFalse);
+    });
+  });
+
+  group('「问 AI」请求（选中内容 → 内置 DeepSeek）', () {
+    test('askAi 会打开面板并挂起请求；两种语义分别记录 submit', () {
+      final s = AppState();
+      expect(s.aiOpen, isFalse);
+
+      s.askAi('  贪污贿赂渎职类犯罪  ', submit: true);
+      expect(s.aiOpen, isTrue, reason: '面板没开就自动打开');
+      expect(s.session.aiPanelOpen, isTrue, reason: '开关要写回会话');
+      expect(s.aiPendingAsk!.text, '贪污贿赂渎职类犯罪', reason: '两端空白应裁掉');
+      expect(s.aiPendingAsk!.submit, isTrue, reason: 'true = 新对话并直接提问');
+      expect(s.takePendingAsk()!.submit, isTrue);
+      expect(s.aiPendingAsk, isNull, reason: '取走后不能重复发送');
+
+      s.askAi('只放进输入框', submit: false);
+      expect(s.takePendingAsk()!.submit, isFalse);
+
+      s.askAi('   ', submit: true);
+      expect(s.aiPendingAsk, isNull, reason: '空白内容不该发起请求');
+      s.dispose();
+    });
+
+    testWidgets('面板取走请求：新对话 + 直接提问会换成「只放进输入框」以外的提示', (t) async {
+      fake.responder = (c) => c.method == 'open' ? true : null;
+      final s = AppState();
+      await t.pumpWidget(hostPane(s, backend: AiBackendKind.external));
+      await t.pump(const Duration(milliseconds: 20));
+      s.askAi('干', submit: true);
+      await t.pump(const Duration(milliseconds: 20));
+      // external 后端：内容进剪贴板并如实提示
+      expect(s.takePendingAsk(), isNull, reason: '请求应被面板消费掉');
+      await t.pump(const Duration(seconds: 3));
     });
   });
 
@@ -320,6 +358,18 @@ void main() {
         AiBackendKind.external,
         reason: 'Windows 等没有内嵌能力 → 用系统浏览器',
       );
+    });
+
+    test('发送脚本：优先点真实发送按钮（合成 Enter 不被 React 采纳）', () {
+      final js = aiSubmitScript();
+      expect(js, contains('button[type="submit"]'));
+      expect(js, contains('send'));
+      expect(js, contains('aria-label'));
+      // 几何筛选：只挑输入框右半边的按钮，避免误点「深度思考 / 智能搜索」
+      expect(js, contains('br.left+br.width*0.6'));
+      // 兜底才用合成 Enter
+      expect(js, contains("key:'Enter'"));
+      expect(js, contains('btn.click()'));
     });
 
     test('注入脚本：转义正确、用的是 React 受控组件的写法', () {
