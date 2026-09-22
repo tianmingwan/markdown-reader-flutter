@@ -93,6 +93,99 @@ String aiFillScript(String text) {
       "return true;}catch(e){return false;}})();";
 }
 
+/// 把选中内容送进 DeepSeek 输入框（[submit] 为 true 时顺便发出去）。
+///
+/// 这是「问 AI」用的统一脚本，比单纯填空多两件保命的事：
+/// 1. **粘性填充**：DeepSeek 是 SPA，新对话页面加载完成后会把输入框重置一次，
+///    填早了会被冲掉 —— 脚本会在页面里盯一段时间，发现内容没了就再填一遍；
+/// 2. **发送重试**：刚填完时发送按钮往往还是 disabled（React 未更新），直接点会
+///    静默失败 —— 按钮可用才点，不可用等下一轮；一旦发出去（输入框清空）立刻停手，
+///    绝不重复发送。
+String aiAskScript(String text, {required bool submit}) {
+  final json = _jsonQuote(text);
+  final flag = submit ? 'true' : 'false';
+  return r'''
+(function(){
+  try{
+    var TEXT=__TEXT__, SUBMIT=__SUBMIT__;
+    var MAXT=SUBMIT?14:9, ticks=0, sends=0;
+    function input(){ return document.querySelector('textarea:not([readonly]):not([disabled])')||document.querySelector('div[contenteditable="true"]'); }
+    function val(el){ return el?String((el.value!==undefined?el.value:el.textContent)||''):''; }
+    function setVal(el,t){
+      el.focus();
+      // 先试浏览器级编辑命令：WebKitGTK 下"原型链 setter + input 事件"这条 React
+      // 老套路不生效（值会被 React 回滚），execCommand 走真实编辑管线，两个引擎都认。
+      try{
+        document.execCommand('selectAll', false, null);
+        document.execCommand('delete', false, null);
+        if(document.execCommand('insertText', false, t) && val(el)===t) return;
+      }catch(e){}
+      var tag=(el.tagName||'').toUpperCase();
+      if(tag==='TEXTAREA'||tag==='INPUT'){
+        var proto=tag==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;
+        var setter=Object.getOwnPropertyDescriptor(proto,'value').set;
+        setter.call(el,t);
+        el.dispatchEvent(new Event('input',{bubbles:true}));
+      }else{
+        el.textContent=t;
+        el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:t}));
+      }
+      el.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+    function usable(b){ return !!b && !b.disabled && b.getAttribute('aria-disabled')!=='true' && b.getBoundingClientRect().width>0; }
+    function findButton(el){
+      var sels=['button[type="submit"]','[data-testid*="send" i]','button[aria-label*="发送"]','button[aria-label*="Send" i]','[role="button"][aria-label*="发送"]','[role="button"][aria-label*="Send" i]'];
+      for(var i=0;i<sels.length;i++){var b=document.querySelector(sels[i]); if(usable(b)) return b;}
+      var box=el.closest('form')||el.parentElement;
+      for(var up=0;up<4&&box;up++){
+        var nodes=box.querySelectorAll('button,[role="button"]'),br=box.getBoundingClientRect();
+        for(var k=nodes.length-1;k>=0;k--){
+          var n=nodes[k]; if(!usable(n)) continue;
+          var r=n.getBoundingClientRect();
+          if(r.left>br.left+br.width*0.6 && n.querySelector('svg')) return n;
+        }
+        box=box.parentElement;
+      }
+      return null;
+    }
+    function tick(){
+      ticks++;
+      var el=input();
+      if(!el){ if(ticks<MAXT) setTimeout(tick,500); return; }
+      var v=val(el).trim();
+      if(SUBMIT && sends>0 && v==='') return;
+      if(v!==TEXT.trim()){
+        if(SUBMIT && sends>0) return;
+        setVal(el,TEXT);
+        if(ticks<MAXT) setTimeout(tick,600);
+        return;
+      }
+      if(!SUBMIT){ if(ticks<MAXT) setTimeout(tick,700); return; }
+      var btn=findButton(el);
+      if(btn){ btn.click(); }
+      else{
+        el.focus();
+        ['keydown','keypress','keyup'].forEach(function(t){el.dispatchEvent(new KeyboardEvent(t,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));});
+      }
+      sends++;
+      if(ticks<MAXT) setTimeout(tick,800);
+    }
+    // 先同步试填一次，把"到底填上没有"如实回给调用方：
+    // 填不上时输入框本来就是空的，发送复查会误报"已发出"，所以必须区分。
+    var el0=input();
+    var first='noinput';
+    if(el0){
+      if(val(el0).trim()!==TEXT.trim()) setVal(el0,TEXT);
+      first = val(el0).trim()===TEXT.trim() ? 'ok' : 'nofill';
+    }
+    tick();
+    return first;
+  }catch(e){return 'error';}
+})();'''
+      .replaceAll('__TEXT__', json)
+      .replaceAll('__SUBMIT__', flag);
+}
+
 /// 把已填好的提问**发出去**（"直接提问"用）。
 ///
 /// DeepSeek 的聊天输入框是 textarea + React 受控：按 Enter 即发送

@@ -125,17 +125,21 @@ class AiWebView {
     final c = _controller;
     if (c == null || text.trim().isEmpty) return null;
     try {
-      final r = await c.runJavaScriptReturningResult(aiFillScript(text));
-      final filled = _truthy(r);
+      // 统一用「粘性填充 + 可选发送」脚本（详见 aiAskScript 的说明）。
+      // 脚本返回字符串状态：ok / nofill / noinput —— 必须区分，否则"没填上"
+      // 会因为输入框本来就是空的而被误判成"已发出"。
+      final r = await c.runJavaScriptReturningResult(
+          aiAskScript(text, submit: submit));
+      final status = r is String ? r.replaceAll('"', '') : '$r';
+      final filled = status == 'ok';
       if (!filled) {
-        onPromptResult?.call(false, '未找到输入框');
+        onPromptResult?.call(
+            false, status == 'nofill' ? '输入框没接受内容' : '未找到输入框');
         return false;
       }
       if (submit) {
-        // 发送脚本在页面内部自己轮询重试；这里等它跑完再复查一次是否真的发出去
-        await c.runJavaScriptReturningResult(aiSubmitScript());
         onPromptResult?.call(true, null);
-        Future<void>.delayed(const Duration(milliseconds: 2600), () async {
+        Future<void>.delayed(const Duration(milliseconds: 4500), () async {
           try {
             final r =
                 await c.runJavaScriptReturningResult(aiSubmitVerifyScript());

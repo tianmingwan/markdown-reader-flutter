@@ -58,49 +58,40 @@ std::string JsonQuote(const std::string& text) {
   return out;
 }
 
-// 把文本填进提问框。DeepSeek 的输入框是 React 受控组件：直接改 value 不会触发
-// 框架更新，必须用原型链上的原生 setter 赋值后再派发 input 事件；找不到
-// textarea 时退到 contenteditable（站点改版兜底）。返回是否真的填进去了。
-std::string BuildFillScript(const std::string& text) {
-  return "(function(){try{var t=" +
-         JsonQuote(text) +
-         ";var el=document.querySelector('textarea:not([readonly]):not([disabled])')"
-         "||document.querySelector('div[contenteditable=\"true\"]')"
-         "||document.querySelector('[contenteditable=\"true\"]');"
-         "if(!el)return false;el.focus();"
-         "var tag=(el.tagName||'').toUpperCase();"
-         "if(tag==='TEXTAREA'||tag==='INPUT'){"
-         "var proto=tag==='TEXTAREA'?window.HTMLTextAreaElement.prototype:"
-         "window.HTMLInputElement.prototype;"
-         "var setter=Object.getOwnPropertyDescriptor(proto,'value').set;"
-         "setter.call(el,t);"
-         "el.dispatchEvent(new Event('input',{bubbles:true}));"
-         "}else{el.textContent=t;"
-         "el.dispatchEvent(new InputEvent('input',{bubbles:true,"
-         "inputType:'insertText',data:t}));}"
-         "el.dispatchEvent(new Event('change',{bubbles:true}));"
-         "return true;}catch(e){return false;}})();";
-}
-
-// 把已填好的提问发出去（"新对话 + 直接提问"用）：DeepSeek 的输入框按 Enter 即发送
-// （Shift+Enter 才是换行），所以派发一组 Enter 键盘事件；找不到 textarea 时退而点发送按钮。
-std::string BuildSubmitScript() {
-  // 点真实的发送按钮（合成 Enter 事件 DeepSeek 的 React 不吃，真机实测）；
-  // 关键：刚填完时发送按钮往往还是 disabled（React 还没更新），所以脚本
-  // **自己在页面里轮询重试**：每 500ms 复查，输入框空了就说明发出去了。
-  return R"JS(
+// 把文本填进 DeepSeek 输入框（submit=true 时顺便发出去）。
+//
+// 比单纯填空多两件保命的事（都是真机踩出来的）：
+// 1) 粘性填充：新对话页面加载完成后 SPA 会重置输入框，填早了会被冲掉，所以填完要盯着；
+// 2) 发送重试：刚填完时发送按钮常是 disabled，直接点会静默失败；发出去（输入框清空）就停手。
+std::string BuildAskScript(const std::string& text, bool submit) {
+  const char* flag = submit ? "true" : "false";
+  std::string js = R"JS(
 (function(){
   try{
-    var TRIES=6;
-    function input(){
-      return document.querySelector('textarea:not([readonly]):not([disabled])')
-          || document.querySelector('div[contenteditable="true"]');
+    var TEXT=__TEXT__, SUBMIT=__SUBMIT__;
+    var MAXT=SUBMIT?14:9, ticks=0, sends=0;
+    function input(){ return document.querySelector('textarea:not([readonly]):not([disabled])')||document.querySelector('div[contenteditable="true"]'); }
+    function val(el){ return el?String((el.value!==undefined?el.value:el.textContent)||''):''; }
+    function setVal(el,t){
+      el.focus();
+      try{
+        document.execCommand('selectAll', false, null);
+        document.execCommand('delete', false, null);
+        if(document.execCommand('insertText', false, t) && val(el)===t) return;
+      }catch(e){}
+      var tag=(el.tagName||'').toUpperCase();
+      if(tag==='TEXTAREA'||tag==='INPUT'){
+        var proto=tag==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;
+        var setter=Object.getOwnPropertyDescriptor(proto,'value').set;
+        setter.call(el,t);
+        el.dispatchEvent(new Event('input',{bubbles:true}));
+      }else{
+        el.textContent=t;
+        el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:t}));
+      }
+      el.dispatchEvent(new Event('change',{bubbles:true}));
     }
-    function val(el){ return el ? String((el.value!==undefined?el.value:el.textContent)||'') : ''; }
-    function usable(b){
-      return !!b && !b.disabled && b.getAttribute('aria-disabled')!=='true'
-             && b.getBoundingClientRect().width>0;
-    }
+    function usable(b){ return !!b && !b.disabled && b.getAttribute('aria-disabled')!=='true' && b.getBoundingClientRect().width>0; }
     function findButton(el){
       var sels=['button[type="submit"]','[data-testid*="send" i]','button[aria-label*="发送"]','button[aria-label*="Send" i]','[role="button"][aria-label*="发送"]','[role="button"][aria-label*="Send" i]'];
       for(var i=0;i<sels.length;i++){var b=document.querySelector(sels[i]); if(usable(b)) return b;}
@@ -108,8 +99,7 @@ std::string BuildSubmitScript() {
       for(var up=0;up<4&&box;up++){
         var nodes=box.querySelectorAll('button,[role="button"]'),br=box.getBoundingClientRect();
         for(var k=nodes.length-1;k>=0;k--){
-          var n=nodes[k];
-          if(!usable(n)) continue;
+          var n=nodes[k]; if(!usable(n)) continue;
           var r=n.getBoundingClientRect();
           if(r.left>br.left+br.width*0.6 && n.querySelector('svg')) return n;
         }
@@ -117,28 +107,50 @@ std::string BuildSubmitScript() {
       }
       return null;
     }
-    var tries=0;
-    function attempt(){
+    function tick(){
+      ticks++;
       var el=input();
-      var text=val(el).trim();
-      if(!text) return true;
-      if(tries>=TRIES) return false;
-      tries++;
+      if(!el){ if(ticks<MAXT) setTimeout(tick,500); return; }
+      var v=val(el).trim();
+      if(SUBMIT && sends>0 && v==='') return;
+      if(v!==TEXT.trim()){
+        if(SUBMIT && sends>0) return;
+        setVal(el,TEXT);
+        if(ticks<MAXT) setTimeout(tick,600);
+        return;
+      }
+      if(!SUBMIT){ if(ticks<MAXT) setTimeout(tick,700); return; }
       var btn=findButton(el);
       if(btn){ btn.click(); }
       else{
         el.focus();
-        ['keydown','keypress','keyup'].forEach(function(t){
-          el.dispatchEvent(new KeyboardEvent(t,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));
-        });
+        ['keydown','keypress','keyup'].forEach(function(t){el.dispatchEvent(new KeyboardEvent(t,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));});
       }
-      setTimeout(attempt, 500);
-      return true;
+      sends++;
+      if(ticks<MAXT) setTimeout(tick,800);
     }
-    return attempt();
-  }catch(e){return false;}
+    var el0=input();
+    var first='noinput';
+    if(el0){
+      if(val(el0).trim()!==TEXT.trim()) setVal(el0,TEXT);
+      first = val(el0).trim()===TEXT.trim() ? 'ok' : 'nofill';
+    }
+    tick();
+    return first;
+  }catch(e){return 'error';}
 })();)JS";
+  const std::string text_json = JsonQuote(text);
+  for (std::string::size_type pos = js.find("__TEXT__"); pos != std::string::npos;
+       pos = js.find("__TEXT__", pos + text_json.size())) {
+    js.replace(pos, 8, text_json);
+  }
+  for (std::string::size_type pos = js.find("__SUBMIT__"); pos != std::string::npos;
+       pos = js.find("__SUBMIT__", pos + 8)) {
+    js.replace(pos, 10, flag);
+  }
+  return js;
 }
+
 
 // 复查提问是否真的发出去了（输入框被清空即视为已发送），用于如实提示
 std::string BuildSubmitVerifyScript() {
@@ -513,7 +525,12 @@ void AiPanel::InjectPending() {
 
 void AiPanel::InjectNow() {
   if (pending_prompt_.empty() || webview_ == nullptr) return;
-  const std::string script = BuildFillScript(pending_prompt_);
+  const bool submit = pending_submit_;
+  const std::string script = BuildAskScript(pending_prompt_, submit);
+  if (g_getenv("MDREADER_DEBUG") != nullptr) {
+    g_printerr("[ai-ask] submit=%d text_len=%zu\n", submit ? 1 : 0,
+               pending_prompt_.size());
+  }
   webkit_web_view_evaluate_javascript(
       WEBKIT_WEB_VIEW(webview_), script.c_str(), -1, nullptr, nullptr, nullptr,
       +[](GObject* source, GAsyncResult* result, gpointer user_data) {
@@ -522,33 +539,35 @@ void AiPanel::InjectNow() {
         g_autoptr(JSCValue) value = webkit_web_view_evaluate_javascript_finish(
             WEBKIT_WEB_VIEW(source), result, &error);
         bool filled = false;
-        if (value != nullptr && jsc_value_is_boolean(value)) {
-          filled = jsc_value_to_boolean(value);
+        std::string why = "未找到输入框";
+        if (value != nullptr && jsc_value_is_string(value)) {
+          g_autofree gchar* st = jsc_value_to_string(value);
+          const std::string status = st == nullptr ? "" : st;
+          filled = status == "ok";
+          if (status == "nofill") why = "输入框没接受内容";
+          if (status == "error") why = "脚本异常";
         }
         if (filled) {
-          const bool submit = self->pending_submit_;
+          // 无捕获 lambda 里不能引用局部变量，从成员上先取出本次是否要发送
+          const bool sent_requested = self->pending_submit_;
           self->pending_prompt_.clear();
           self->pending_submit_ = false;
           self->inject_attempts_ = 0;
-          if (submit) {
-            // "新对话 + 直接提问"：脚本内部会自己轮询重试（按钮刚填完时可能还 disabled），
-            // 2.6 秒后复查输入框是否已清空，把"到底发出去没有"如实回报给 Dart。
-            webkit_web_view_evaluate_javascript(
-                WEBKIT_WEB_VIEW(self->webview_),
-                BuildSubmitScript().c_str(), -1, nullptr, nullptr, nullptr,
-                nullptr, nullptr);
+          if (sent_requested) {
+            // 脚本内部已经轮询重试着发送；这里 4.5 秒后复查输入框是否已清空，
+            // 把"到底发出去没有"如实回报给 Dart（不到位就提示用户手动发送）。
             g_timeout_add(
-                2600,
+                4500,
                 +[](gpointer data) -> gboolean {
-                  auto* self = static_cast<AiPanel*>(data);
-                  if (self->webview_ == nullptr) return G_SOURCE_REMOVE;
+                  auto* panel = static_cast<AiPanel*>(data);
+                  if (panel->webview_ == nullptr) return G_SOURCE_REMOVE;
                   webkit_web_view_evaluate_javascript(
-                      WEBKIT_WEB_VIEW(self->webview_),
+                      WEBKIT_WEB_VIEW(panel->webview_),
                       BuildSubmitVerifyScript().c_str(), -1, nullptr, nullptr,
                       nullptr,
                       +[](GObject* source, GAsyncResult* result,
                           gpointer user) {
-                        auto* panel = static_cast<AiPanel*>(user);
+                        auto* p2 = static_cast<AiPanel*>(user);
                         g_autoptr(GError) error = nullptr;
                         g_autoptr(JSCValue) value =
                             webkit_web_view_evaluate_javascript_finish(
@@ -560,16 +579,17 @@ void AiPanel::InjectNow() {
                         FlValue* m = fl_value_new_map();
                         fl_value_set_string_take(m, "sent",
                                                  fl_value_new_bool(sent));
-                        panel->Emit("submitResult", m);
+                        p2->Emit("submitResult", m);
                       },
-                      self);
+                      panel);
                   return G_SOURCE_REMOVE;
                 },
                 self);
           }
           FlValue* m = fl_value_new_map();
           fl_value_set_string_take(m, "ok", fl_value_new_bool(true));
-          fl_value_set_string_take(m, "submitted", fl_value_new_bool(submit));
+          fl_value_set_string_take(m, "submitted",
+                                   fl_value_new_bool(sent_requested));
           self->Emit("promptResult", m);
           return;
         }
@@ -581,8 +601,7 @@ void AiPanel::InjectNow() {
           self->inject_attempts_ = 0;
           FlValue* m = fl_value_new_map();
           fl_value_set_string_take(m, "ok", fl_value_new_bool(false));
-          fl_value_set_string_take(m, "error",
-                                   fl_value_new_string("未找到输入框"));
+          fl_value_set_string_take(m, "error", fl_value_new_string(why.c_str()));
           self->Emit("promptResult", m);
           return;
         }

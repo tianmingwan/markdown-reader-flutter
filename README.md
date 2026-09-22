@@ -74,8 +74,10 @@ macOS `libmdreader_core.dylib`；Android 交给系统从 APK 的 `lib/<abi>/` �
 
 **已发布版本**：
 
-- **v0.2.3**（最新）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.3>
-  —— 修 Linux 端"放进去不搜"（发送脚本自轮询重试 + 开新对话次序 + 发送结果复查）
+- **v0.2.4**（最新）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.4>
+  —— 修 Linux(WebKitGTK) 端填充不生效（改用 execCommand）+ 填充结果如实上报，
+  加上开新对话次序与发送时机/复查
+- v0.2.3：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.3>
 - v0.2.2：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.2>
   —— 右侧 AI 搜索分栏 + 选中内容送进内置 DeepSeek（新对话直接提问 / 只放进输入框）
   + 选中菜单清掉系统与第三方的"文本处理"项。产物：`mdreader-flutter-android.apk` 61.1 MB /
@@ -266,7 +268,13 @@ Linux 路径（Dart 决定布局，原生只负责贴上去）
 1. **新对话 + 直接提问**：开新对话 → 把选中内容放进输入框 → **自动发送** → 直接出结果。
    发送是**点 DeepSeek 真实的发送按钮**（几何筛选：只挑输入框右半边的按钮，避开
    「深度思考 / 智能搜索」）；实测合成 Enter 事件 React 不吃，只作为兜底。
-   **两个踩过的坑（都已修）**：
+   **四个踩过的坑（都已修）**：
+   - *WebKitGTK 下"原型链 setter + input 事件"这条 React 老套路不生效*：值会被 React
+     回滚成空（Chromium 上正常），于是 Linux 端"放进去了却不搜" —— 改为优先用浏览器级
+     编辑命令 `document.execCommand('insertText')` 并读回校验，两个引擎都认；
+   - *填充失败会被误报成"已发出"*：填不上时输入框本来就是空的，复查脚本会以为消息发走了
+     —— 现在问询脚本返回**字符串状态**（`ok` / `nofill` / `noinput`），只有 `ok` 才继续
+     复查发送，失败就如实提示并退回剪贴板兜底；
    - *刚填完时发送按钮还是 disabled*（React 尚未更新），立刻点会静默失败 →
      发送脚本改为**在页面内每 500ms 轮询重试**，输入框被清空即视为已发出；
    - *开新对话的次序*：必须先挂待办再导航，等**新对话加载完成**才补填；
