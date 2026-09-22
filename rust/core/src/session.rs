@@ -26,6 +26,13 @@ pub struct Session {
     pub font_size: Option<u32>,
     /// 文件树排序方式（null=name-asc）
     pub sort_mode: Option<String>,
+    /// 右侧 AI 面板（内嵌 DeepSeek）是否打开；老会话文件里没有这个键，
+    /// 用 serde(default) 兜住，否则升级后整个 session.json 会解析失败被清空。
+    #[serde(default)]
+    pub ai_panel_open: Option<bool>,
+    /// AI 面板宽度 px（null=默认宽度）
+    #[serde(default)]
+    pub ai_panel_width: Option<u32>,
 }
 
 impl Default for Session {
@@ -38,6 +45,8 @@ impl Default for Session {
             theme: None,
             font_size: None,
             sort_mode: None,
+            ai_panel_open: None,
+            ai_panel_width: None,
         }
     }
 }
@@ -94,6 +103,38 @@ mod tests {
         assert_eq!(l.recent_roots.len(), 1);
         assert_eq!(l.last_file.as_deref(), Some("C:/docs/a.md"));
         assert_eq!(l.file_positions["C:/docs|C:/docs/a.md"], 0.42);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 老版本写下的 session.json 没有 aiPanel* 字段，必须仍能读出来（不能整份丢）。
+    #[test]
+    fn legacy_session_without_ai_fields_still_loads() {
+        let dir = std::env::temp_dir().join(format!("mdreader_sess_old_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            session_path(&dir),
+            r#"{"recentRoots":[],"lastRoot":null,"lastFile":"/a.md",
+                "filePositions":{},"theme":"dark","fontSize":16,
+                "sortMode":"name-asc"}"#,
+        )
+        .unwrap();
+        let l = load(&dir);
+        assert_eq!(l.last_file.as_deref(), Some("/a.md"));
+        assert_eq!(l.theme.as_deref(), Some("dark"));
+        assert_eq!(l.ai_panel_open, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ai_panel_fields_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("mdreader_sess_ai_{}", std::process::id()));
+        let mut s = Session::default();
+        s.ai_panel_open = Some(true);
+        s.ai_panel_width = Some(468);
+        save(&dir, &s).unwrap();
+        let l = load(&dir);
+        assert_eq!(l.ai_panel_open, Some(true));
+        assert_eq!(l.ai_panel_width, Some(468));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

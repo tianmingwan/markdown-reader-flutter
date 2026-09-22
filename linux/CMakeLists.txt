@@ -54,6 +54,16 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTK REQUIRED IMPORTED_TARGET gtk+-3.0)
 
+# AI 面板（右侧内嵌 DeepSeek 网页版）依赖系统 WebKitGTK。
+# 这里是**可选**依赖：没有开发包时照常构建，只是 AI 面板退化成「用系统浏览器打开」，
+# 这样 CI / 其它发行版不会因为缺一个非核心库而构建失败。
+pkg_check_modules(WEBKIT IMPORTED_TARGET webkit2gtk-4.1)
+if(WEBKIT_FOUND)
+  message(STATUS "AI 面板：启用 WebKitGTK 内嵌网页")
+else()
+  message(STATUS "AI 面板：未找到 webkit2gtk-4.1，退化为系统浏览器打开")
+endif()
+
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 

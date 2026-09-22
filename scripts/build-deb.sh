@@ -42,14 +42,15 @@ Section: utils
 Priority: optional
 Architecture: $ARCH
 Installed-Size: $SIZE_KB
-Depends: libgtk-3-0 | libgtk-3-0t64, libblkid1, liblzma5, libepoxy0, libegl1, libgles2, libfontconfig1, libfreetype6, libharfbuzz0b, libcairo2, libpango-1.0-0, libx11-6
+Depends: libgtk-3-0 | libgtk-3-0t64, libblkid1, liblzma5, libepoxy0, libegl1, libgles2, libfontconfig1, libfreetype6, libharfbuzz0b, libcairo2, libpango-1.0-0, libx11-6, libwebkit2gtk-4.1-0
 Maintainer: YG <aakb@localhost>
 Homepage: https://github.com/tianmingwan/markdown-reader-flutter
 Description: Markdown 阅读器（Flutter 重构版）
  打开即预览的 Markdown 阅读器：Rust 核心（markdown 解析 / syntect 高亮 /
  目录扫描 / 全文搜索）+ Flutter UI。
  .
- 支持大文档虚拟滚动、多标签、折叠答案（details）、主题与字号、会话记忆。
+ 支持大文档虚拟滚动、多标签、折叠答案（details）、主题与字号、会话记忆，
+ 以及右侧 AI 搜索分栏（内嵌 DeepSeek 网页版，登录态本地保存）。
 CONTROL
 
 cat > "$ROOT/DEBIAN/postinst" <<'POSTINST'

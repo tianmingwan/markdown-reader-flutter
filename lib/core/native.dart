@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'models.dart';
 
@@ -221,9 +222,33 @@ class NativeCore {
     }
   }
 
-  /// 配置目录（与原 Tauri 版一致，便于用户数据延续）。
-  /// MDREADER_CFG_DIR 可覆盖（自测 / 多配置档）。
-  static String configDir() {
+  /// 配置目录。桌面沿用与原 Tauri 版一致的路径（便于用户数据延续）：
+  /// `MDREADER_CFG_DIR` > `$XDG_CONFIG_HOME/com.chensdong.mdreader` > `$HOME/.config/...`。
+  ///
+  /// 移动端不一样：Android/iOS 上 `HOME` 指向的位置**不可写**，会话（上次目录、
+  /// 滚动位置、主题、AI 面板开关）会静默丢光，所以要先 [resolveConfigDir] 把目录
+  /// 落到应用私有目录（path_provider）。
+  static String configDir() => _cfgDir ?? _envConfigDir();
+
+  static String? _cfgDir;
+
+  /// 启动时调一次：解析出真正可写的配置目录（移动端走应用私有目录）。
+  static Future<String> resolveConfigDir() async {
+    if (_cfgDir != null) return _cfgDir!;
+    if (Platform.isAndroid || Platform.isIOS) {
+      try {
+        final dir = await getApplicationSupportDirectory();
+        _cfgDir = dir.path;
+        return _cfgDir!;
+      } catch (_) {
+        // 拿不到就退回环境变量推导（至少不会崩）
+      }
+    }
+    _cfgDir = _envConfigDir();
+    return _cfgDir!;
+  }
+
+  static String _envConfigDir() {
     final override = Platform.environment['MDREADER_CFG_DIR'];
     if (override != null && override.isNotEmpty) return override;
     final home = Platform.environment['HOME'] ?? '.';

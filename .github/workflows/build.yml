@@ -35,8 +35,10 @@ jobs:
       - name: Linux 构建依赖
         run: |
           sudo apt-get update
+          # libwebkit2gtk-4.1-dev：右侧 AI 面板内嵌 DeepSeek 网页用
+          # （缺它也能构建，只是该功能退化成「用系统浏览器打开」）
           sudo apt-get install -y libgtk-3-dev libblkid-dev liblzma-dev \
-            ninja-build cmake pkg-config libglu1-mesa
+            ninja-build cmake pkg-config libglu1-mesa libwebkit2gtk-4.1-dev
 
       - name: 构建 Rust core
         run: ./scripts/build-rust.sh

@@ -9,6 +9,7 @@ project(runner LANGUAGES CXX)
 add_executable(${BINARY_NAME}
   "main.cc"
   "my_application.cc"
+  "ai_panel.cc"
   "${FLUTTER_MANAGED_DIR}/generated_plugin_registrant.cc"
 )
 
@@ -22,5 +23,11 @@ add_definitions(-DAPPLICATION_ID="${APPLICATION_ID}")
 # Add dependency libraries. Add any application-specific dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter)
 target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::GTK)
+
+# AI 面板：仅当系统有 webkit2gtk-4.1 时编译内嵌网页实现
+if(WEBKIT_FOUND)
+  target_link_libraries(${BINARY_NAME} PRIVATE PkgConfig::WEBKIT)
+  target_compile_definitions(${BINARY_NAME} PRIVATE MDREADER_HAVE_WEBKIT=1)
+endif()
 
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")

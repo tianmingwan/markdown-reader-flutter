@@ -1,5 +1,7 @@
 #include "my_application.h"
 
+#include "ai_panel.h"
+
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
@@ -65,7 +67,12 @@ static void my_application_activate(GApplication* application) {
   gdk_rgba_parse(&background_color, "#000000");
   fl_view_set_background_color(view, &background_color);
   gtk_widget_show(GTK_WIDGET(view));
-  gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
+  // 窗口子件是 GtkOverlay：主件 = Flutter 视图（占满客户区），叠加件 = 右侧
+  // AI 面板的 WebKitGTK 视图（按 Dart 给的矩形精确盖上）。
+  GtkWidget* overlay = gtk_overlay_new();
+  gtk_widget_show(overlay);
+  gtk_container_add(GTK_CONTAINER(window), overlay);
+  gtk_container_add(GTK_CONTAINER(overlay), GTK_WIDGET(view));
 
   // Show the window when Flutter renders.
   // Requires the view to be realized so we can start rendering.
@@ -74,6 +81,9 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+
+  // 注册 mdreader/ai_panel 通道（WebView 在第一次 open 时才创建）
+  AiPanel::GetInstance()->Attach(view, overlay);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }

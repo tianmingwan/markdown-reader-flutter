@@ -1,4 +1,16 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- 右侧 AI 面板要联网加载 DeepSeek 网页；release 包不会自动带上
+         debug/profile manifest 里的这条权限，必须显式声明。 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- 「所有文件访问」：Flutter 版把目录当普通文件系统路径交给 Rust 扫描，
+         Android 11+ 不授权就扫不到 .md（目录能选中但显示 0 篇）。
+         它只能由用户在系统设置里打开，应用内会引导（见 MainActivity.kt）。
+         Google Play 对该权限审查很严；本工程是个人自用/侧载，故采用。 -->
+    <uses-permission
+        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
     <application
         android:label="markdown阅读器"
         android:name="${applicationName}"

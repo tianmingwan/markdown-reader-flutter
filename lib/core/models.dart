@@ -339,6 +339,10 @@ class SessionData {
   int? fontSize;
   String? sortMode;
 
+  /// 右侧 AI 面板（内嵌 DeepSeek）是否打开 / 宽度
+  bool? aiPanelOpen;
+  int? aiPanelWidth;
+
   SessionData({
     this.recentRoots = const [],
     this.lastRoot,
@@ -347,6 +351,8 @@ class SessionData {
     this.theme,
     this.fontSize,
     this.sortMode,
+    this.aiPanelOpen,
+    this.aiPanelWidth,
   });
 
   factory SessionData.fromJson(Map<String, Object?> m) => SessionData(
@@ -362,6 +368,8 @@ class SessionData {
         theme: m['theme'] as String?,
         fontSize: (m['fontSize'] as num?)?.toInt(),
         sortMode: m['sortMode'] as String?,
+        aiPanelOpen: m['aiPanelOpen'] as bool?,
+        aiPanelWidth: (m['aiPanelWidth'] as num?)?.toInt(),
       );
 
   Map<String, Object?> toJson() => {
@@ -372,6 +380,8 @@ class SessionData {
         'theme': theme,
         'fontSize': fontSize,
         'sortMode': sortMode,
+        'aiPanelOpen': aiPanelOpen,
+        'aiPanelWidth': aiPanelWidth,
       };
 }
 

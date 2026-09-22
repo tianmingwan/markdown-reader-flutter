@@ -10,8 +10,9 @@ linux/flutter/ephemeral/
 # ---- Rust ----
 rust/core/target/
 
-# ---- 构建产物（由 scripts/build-rust.sh 重新生成）----
+# ---- 构建产物（由 scripts/build-rust.sh / cargo ndk 重新生成）----
 native/*.so
+android/app/src/main/jniLibs/
 dist/
 
 # ---- 杂项 ----

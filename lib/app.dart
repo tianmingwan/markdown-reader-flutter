@@ -7,6 +7,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'ai/ai_pane.dart';
+import 'core/android_storage.dart';
 import 'core/models.dart';
 import 'core/native.dart';
 import 'render/block_render.dart';
@@ -21,6 +23,41 @@ class OpenSearchIntent extends Intent {
 
 class CloseSearchIntent extends Intent {
   const CloseSearchIntent();
+}
+
+/// Ctrl+Shift+A：开关右侧 AI 搜索分栏
+class ToggleAiIntent extends Intent {
+  const ToggleAiIntent();
+}
+
+/// 浮层感知：原生网页是独立子窗口，永远盖在 Flutter 之上，
+/// 所以 Flutter 自己弹菜单/对话框时必须先把网页藏起来（见 AppState.overlayDepth）。
+class AiOverlayObserver extends NavigatorObserver {
+  final AppState state;
+  AiOverlayObserver(this.state);
+  int _depth = 1; // home 路由本身占一层
+
+  void _sync(int depth) {
+    _depth = depth < 1 ? 1 : depth;
+    state.setOverlayDepth(_depth);
+  }
+
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    // 首帧里 push 的初始路由不能在 build 期间触发重建
+    if (_depth == 1 && previousRoute == null) return;
+    _sync(_depth + 1);
+  }
+
+  @override
+  void didPop(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _sync(_depth - 1);
+  }
+
+  @override
+  void didRemove(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    _sync(_depth - 1);
+  }
 }
 
 /// 快捷键层（独立出来便于测试）。
@@ -38,6 +75,8 @@ class AppShortcuts extends StatelessWidget {
         SingleActivator(LogicalKeyboardKey.keyF, control: true):
             OpenSearchIntent(),
         SingleActivator(LogicalKeyboardKey.escape): CloseSearchIntent(),
+        SingleActivator(LogicalKeyboardKey.keyA,
+            control: true, shift: true): ToggleAiIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -45,6 +84,12 @@ class AppShortcuts extends StatelessWidget {
             onInvoke: (_) {
               state.openSearch();
               if (!state.sidebarOpen) state.toggleSidebar();
+              return null;
+            },
+          ),
+          ToggleAiIntent: CallbackAction<ToggleAiIntent>(
+            onInvoke: (_) {
+              state.toggleAi();
               return null;
             },
           ),
@@ -74,6 +119,7 @@ class MarkdownReaderApp extends StatefulWidget {
 
 class _MarkdownReaderAppState extends State<MarkdownReaderApp> {
   final AppState state = AppState();
+  late final AiOverlayObserver _aiObserver = AiOverlayObserver(state);
 
   @override
   void initState() {
@@ -88,6 +134,7 @@ class _MarkdownReaderAppState extends State<MarkdownReaderApp> {
       builder: (context, _) => MaterialApp(
         title: 'markdown阅读器',
         debugShowCheckedModeBanner: false,
+        navigatorObservers: [_aiObserver],
         themeMode: state.themeMode,
         theme: ThemeData(
           useMaterial3: true,
@@ -118,41 +165,131 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   AppState get s => widget.state;
 
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// 授权「所有文件访问」要跳系统设置页，回到前台时重新查询：
+  /// 授权成功就顺手把当前目录重扫一遍（之前是 0 篇）。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    final before = s.allFilesAccess;
+    s.refreshAllFilesAccess().then((_) {
+      if (before == false && s.allFilesAccess == true && mounted) {
+        s.showToast('已获得「所有文件访问」权限',
+            duration: const Duration(seconds: 4));
+        if (s.root != null) s.refreshTree();
+      }
+    });
+  }
+
   Future<void> _pickFolder() async {
+    // 安卓：没给「所有文件访问」的话，选中的目录会被扫成 0 篇，先引导授权
+    if (AndroidStorage.applicable && s.allFilesAccess == false) {
+      await _askAllFilesAccess();
+      return;
+    }
     final p = await getDirectoryPath();
     if (p != null) await s.openRoot(p);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: _buildAppBar(),
-      body: Column(
-        children: [
-          Expanded(
-            child: Row(
-              children: [
-                if (s.sidebarOpen) ...[
-                  SizedBox(
-                    width: 280,
-                    child: s.searchOpen
-                        ? SearchPanel(state: s)
-                        : FileTreePanel(state: s, onPickFolder: _pickFolder),
-                  ),
-                  const VerticalDivider(width: 1),
-                ],
-                Expanded(child: _buildMain()),
-              ],
-            ),
+  /// 说明为什么需要这个权限，并把用户送到系统设置页
+  Future<void> _askAllFilesAccess() async {
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('需要「所有文件访问」权限'),
+        content: const Text(
+          '安卓 11 起，应用默认不能直接读取存储卡里的文档，'
+          '选中文件夹也会显示 0 篇。\n\n'
+          '请在接下来的系统设置页里打开「允许管理所有文件」（不同 ROM 文案略有差异），'
+          '返回本应用后会自动重扫。',
+          style: TextStyle(fontSize: 13, height: 1.6),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
           ),
-          if (s.tabs.isNotEmpty) _buildStatusBar(),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('去授权'),
+          ),
         ],
       ),
     );
+    if (go == true) await AndroidStorage.requestAllFilesAccess();
   }
+
+  @override
+  Widget build(BuildContext context) {
+    final windowW = MediaQuery.of(context).size.width;
+    // 窄屏（手机 / 竖屏平板）：分栏直接占满内容区，否则正文会被挤成一条缝
+    final takeover = s.aiOpen && windowW < AppState.threeColumnMinWidth;
+    return PopScope(
+      // Android 返回键：先关 AI 面板 / 搜索面板，都没有才退出应用
+      canPop: !s.aiOpen && !s.searchOpen,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (s.aiOpen) {
+          s.toggleAi();
+        } else if (s.searchOpen) {
+          s.closeSearch();
+        }
+      },
+      child: Scaffold(
+        appBar: _buildAppBar(),
+        body: Column(
+          children: [
+            Expanded(
+              child: takeover
+                  ? AiPane(
+                      state: s,
+                      width: windowW,
+                      compact: true,
+                    )
+                  : Row(
+                      children: [
+                        if (s.sidebarOpen) ...[
+                          SizedBox(
+                            width: 280,
+                            child: s.searchOpen
+                                ? SearchPanel(state: s)
+                                : FileTreePanel(
+                                    state: s, onPickFolder: _pickFolder),
+                          ),
+                          const VerticalDivider(width: 1),
+                        ],
+                        Expanded(child: _buildMain()),
+                        if (s.aiOpen) ...[
+                          AiPaneResizer(state: s),
+                          AiPane(state: s, width: _aiPaneWidth(context)),
+                        ],
+                      ],
+                    ),
+            ),
+            if (s.tabs.isNotEmpty) _buildStatusBar(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 面板占宽：窗口太窄时往下压，保证阅读区不被挤没
+  double _aiPaneWidth(BuildContext context) =>
+      s.aiPaneWidthFor(MediaQuery.of(context).size.width);
 
   PreferredSizeWidget _buildAppBar() {
     final t = Theme.of(context);
@@ -190,6 +327,16 @@ class _HomePageState extends State<HomePage> {
               }
             },
           ),
+          IconButton(
+            tooltip: s.aiOpen
+                ? '关闭 AI 搜索面板'
+                : 'AI 搜索：在右侧打开 DeepSeek 对话',
+            icon: Icon(
+              s.aiOpen ? Icons.smart_toy : Icons.smart_toy_outlined,
+            ),
+            color: s.aiOpen ? Theme.of(context).colorScheme.primary : null,
+            onPressed: s.toggleAi,
+          ),
           if (s.highlightQuery != null && !s.searchOpen) ...[
             const Spacer(),
             Flexible(child: Container(
@@ -220,11 +367,15 @@ class _HomePageState extends State<HomePage> {
             )),
           ],
           if (s.toast != null)
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: Text(
-                s.toast!,
-                style: TextStyle(fontSize: 12, color: t.colorScheme.primary),
+            Flexible(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: Text(
+                  s.toast!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: t.colorScheme.primary),
+                ),
               ),
             ),
           // 字号
@@ -610,29 +761,40 @@ class _ReadViewState extends State<ReadView> {
       widget.state.fontSize,
       highlight: widget.state.highlightQuery,
     );
-    final width = (MediaQuery.of(context).size.width *
-            (widget.state.sidebarOpen ? 0.78 : 0.86))
-        .clamp(320.0, 1180.0);
+    // 正文列宽按**实际留给阅读区的宽度**算：右侧 AI 分栏打开时不能再按整窗宽度算，
+    // 否则文本会一直铺到分栏边上（列宽公式的意义就是留出两侧留白）。
+    final windowW = MediaQuery.of(context).size.width;
+    final aiW =
+        widget.state.aiOpen ? widget.state.aiPaneWidthFor(windowW) : 0.0;
+    final width =
+        ((windowW - aiW) * (widget.state.sidebarOpen ? 0.78 : 0.86))
+            .clamp(320.0, 1180.0);
 
-    return Center(
-      child: ListView.builder(
-        controller: _ctl,
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
-        itemCount: doc.blockCount,
-        itemBuilder: (context, i) {
-          return ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: width),
-            child: buildBlock(
-              doc.blockAt(i),
-              st,
-              onLink: _handleLink,
-              folds: widget.state.folds,
-              onFoldChanged: () => setState(() {}),
-              index: i,
-              maxWidth: width,
-            ),
-          );
-        },
+    return SelectionArea(
+      // 选中文字存进 state，供 AI 面板「带入提问框」用。
+      // 包在阅读区外层（而不是逐块 SelectableText）才能跨块连选整道题。
+      onSelectionChanged: (content) =>
+          widget.state.setSelection(content?.plainText),
+      child: Center(
+        child: ListView.builder(
+          controller: _ctl,
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+          itemCount: doc.blockCount,
+          itemBuilder: (context, i) {
+            return ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: width),
+              child: buildBlock(
+                doc.blockAt(i),
+                st,
+                onLink: _handleLink,
+                folds: widget.state.folds,
+                onFoldChanged: () => setState(() {}),
+                index: i,
+                maxWidth: width,
+              ),
+            );
+          },
+        ),
       ),
     );
   }

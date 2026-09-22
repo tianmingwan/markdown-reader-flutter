@@ -309,7 +309,9 @@ class _CodeBlock extends StatelessWidget {
                   ),
                 ),
               ),
-            SelectableText.rich(TextSpan(style: base, children: spans)),
+            // 用 Text 而不是 SelectableText：整个阅读区外层套了 SelectionArea，
+            // 选区由它统一管理（嵌套可选组件不被支持），也才能跨块连选。
+            Text.rich(TextSpan(style: base, children: spans)),
           ],
         ),
       ),
@@ -353,7 +355,7 @@ class _MermaidFallback extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            SelectableText(
+            Text(
               code,
               style: TextStyle(
                 fontFamily: 'monospace',

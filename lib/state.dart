@@ -6,6 +6,7 @@ import 'dart:ui' show PlatformDispatcher, AppExitResponse;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import 'core/android_storage.dart';
 import 'core/models.dart';
 import 'core/native.dart';
 import 'perf.dart';
@@ -59,6 +60,112 @@ class AppState extends ChangeNotifier {
   bool sidebarOpen = true;
   String? toast;
 
+  // ------------------------------------------------------------ AI 面板
+
+  /// 默认宽度：够放下 DeepSeek 的对话列，又不至于把正文挤没
+  static const double aiPaneDefaultWidth = 420;
+  static const double aiPaneMinWidth = 260;
+  static const double aiPaneMaxWidth = 900;
+
+  /// 阅读区至少要留的宽度：面板再宽也不能把正文挤没
+  static const double readerMinWidth = 360;
+
+  /// 三栏（文件树 + 正文 + AI 面板）都放得下的最小窗口宽度；
+  /// 比这个窄就让 AI 面板占满内容区，否则正文会被挤成一条缝（手机 / 竖屏平板）。
+  static const double threeColumnMinWidth =
+      280 + readerMinWidth + aiPaneMinWidth;
+
+  /// AI 面板是否打开（右侧内嵌 DeepSeek）
+  bool aiOpen = false;
+  double aiWidth = aiPaneDefaultWidth;
+
+  /// 正在拖动分栏：拖动期间要藏起原生网页，否则指针事件被它吃掉
+  bool aiDragging = false;
+
+  /// Flutter 自己弹的浮层（菜单/对话框/下拉）层数。原生网页是**独立的原生子窗口**，
+  /// 永远盖在 Flutter 之上，所以浮层弹出时必须先把网页藏起来，否则菜单会被盖住。
+  /// 初始为 1：home 路由本身占一层，>1 才说明有浮层。
+  int overlayDepth = 1;
+
+  /// 安卓「所有文件访问」授权状态（null = 非安卓 / 未知）。
+  /// Flutter 版把目录当普通路径交给 Rust 扫描，没这个权限就扫不到 .md。
+  bool? allFilesAccess;
+
+  /// 重新查询「所有文件访问」（授权入口在系统设置里，回来时要再查一次）
+  Future<void> refreshAllFilesAccess() async {
+    if (!AndroidStorage.applicable) return;
+    final v = await AndroidStorage.hasAllFilesAccess();
+    if (v == allFilesAccess) return;
+    allFilesAccess = v;
+    notifyListeners();
+  }
+
+  /// 阅读区当前选中的文字（用于 AI 面板的「带入提问框」）。
+  /// 用独立的 ValueNotifier 而不是 notifyListeners：拖选时选区每帧都在变，
+  /// 走全局通知会让整个界面（含文件树、阅读区）跟着每帧重建。
+  final ValueNotifier<String?> selection = ValueNotifier<String?>(null);
+
+  String? get selectionText => selection.value;
+
+  /// 原生网页此刻是否应该可见
+  bool get aiNativeVisible => aiOpen && !aiDragging && overlayDepth <= 1;
+
+  /// 面板占宽：窗口太窄时往下压，保证阅读区不被挤没
+  double aiPaneWidthFor(double windowWidth) {
+    final maxW = (windowWidth - readerMinWidth)
+        .clamp(aiPaneMinWidth, aiPaneMaxWidth)
+        .toDouble();
+    return aiWidth.clamp(aiPaneMinWidth, maxW).toDouble();
+  }
+
+  void toggleAi() {
+    aiOpen = !aiOpen;
+    session.aiPanelOpen = aiOpen;
+    _scheduleSave();
+    notifyListeners();
+  }
+
+  void setAiWidth(double v) {
+    final next = v.clamp(aiPaneMinWidth, aiPaneMaxWidth).toDouble();
+    if (next == aiWidth) return;
+    aiWidth = next;
+    session.aiPanelWidth = aiWidth.round();
+    _scheduleSave();
+    notifyListeners();
+  }
+
+  void setAiDragging(bool v) {
+    if (aiDragging == v) return;
+    aiDragging = v;
+    notifyListeners();
+  }
+
+  void setOverlayDepth(int depth) {
+    final next = depth < 1 ? 1 : depth;
+    if (next == overlayDepth) return;
+    overlayDepth = next;
+    notifyListeners();
+  }
+
+  /// 阅读区选中文字变化。
+  ///
+  /// **刻意不因为"选区被折叠"就清空**：安卓上点空白处时，第一下会同时收起
+  /// 系统的选词菜单并折叠选区，如果这里立刻清空，「带入提问框」按钮会在同一拍里
+  /// 变成禁用，用户永远点不上。所以只刷新非空选区，切换文档时才清。
+  /// 故意不 notifyListeners：见 [selection] 的说明。
+  void setSelection(String? text) {
+    final trimmed = text?.trim();
+    if (trimmed == null || trimmed.isEmpty) return; // 折叠/清空不改动已记下的选区
+    if (trimmed == selection.value) return;
+    selection.value = trimmed;
+  }
+
+  /// 切换文档 / 关闭面板时丢弃上一次的选区（避免把 A 文档的句子带进 B 文档的提问）
+  void clearSelection() {
+    if (selection.value == null) return;
+    selection.value = null;
+  }
+
   SessionData session = SessionData();
   Timer? _saveTimer;
   int _dbgRead = 0, _dbgRender = 0;
@@ -82,6 +189,9 @@ class AppState extends ChangeNotifier {
   Future<void> boot() async {
     _installExitHook();
     try {
+      // 移动端要先解析出可写的配置目录，否则会话（含 AI 面板开关）存不下来
+      await NativeCore.resolveConfigDir();
+      await refreshAllFilesAccess();
       session = NativeCore.loadSession(NativeCore.configDir());
       themeMode = switch (session.theme) {
         'light' => ThemeMode.light,
@@ -90,10 +200,24 @@ class AppState extends ChangeNotifier {
       };
       fontSize = (session.fontSize ?? 15).toDouble().clamp(13, 21);
       sortMode = SortMode.fromId(session.sortMode);
+      aiOpen = session.aiPanelOpen ?? false;
+      aiWidth = (session.aiPanelWidth ?? aiPaneDefaultWidth)
+          .toDouble()
+          .clamp(aiPaneMinWidth, aiPaneMaxWidth)
+          .toDouble();
     } catch (e) {
       _toast('会话读取失败：$e');
     }
     notifyListeners();
+
+    // 可选：启动即打开右侧 AI 面板（自动化验证 / 手动调试用）
+    if (Platform.environment['MDREADER_AI'] == '1') {
+      aiOpen = true;
+      session.aiPanelOpen = true;
+      session.aiPanelWidth = aiWidth.round();
+      _scheduleSave();
+      notifyListeners();
+    }
 
     // 命令行特性：MDREADER_OPEN=<目录> 直接打开（也用于自动化自测）
     final preset = Platform.environment['MDREADER_OPEN'];
@@ -141,6 +265,10 @@ class AppState extends ChangeNotifier {
       return;
     }
     scanning = false;
+    if ((tree?.mdCount ?? 0) == 0 && allFilesAccess == false) {
+      // 目录能选中却一篇都没有：多半是没给「所有文件访问」
+      _toast('扫不到文档：请在「所有文件访问」里允许本应用');
+    }
 
     session.lastRoot = RootRef('fs', path);
     final recents = session.recentRoots.where((r) => r.loc != path).toList();
@@ -197,11 +325,13 @@ class AppState extends ChangeNotifier {
   }) async {
     final existing = tabs.indexWhere((t) => t.path == path);
     if (existing >= 0) {
+      if (activeIndex != existing) clearSelection();
       activeIndex = existing;
       if (seek) tabs[existing].seekPending = true;
       notifyListeners();
       return;
     }
+    clearSelection();
     final tab = TabItem(
       path: path,
       name: path.split('/').last,
@@ -290,6 +420,7 @@ class AppState extends ChangeNotifier {
 
   void activate(int i) {
     if (i < 0 || i >= tabs.length) return;
+    if (activeIndex != i) clearSelection();
     activeIndex = i;
     final t = tabs[i];
     if (t.doc == null && !t.loading) {
@@ -435,10 +566,12 @@ class AppState extends ChangeNotifier {
     } catch (_) {}
   }
 
-  void _toast(String msg) {
+  /// 工具栏右侧的短提示（AI 面板的反馈也走这里：原生网页会盖住面板内部的
+  /// 任何 Flutter 内容，所以提示必须显示在面板之外）。
+  void showToast(String msg, {Duration duration = const Duration(seconds: 2)}) {
     toast = msg;
     notifyListeners();
-    Future.delayed(const Duration(seconds: 2), () {
+    Future.delayed(duration, () {
       if (toast == msg) {
         toast = null;
         notifyListeners();
@@ -446,10 +579,13 @@ class AppState extends ChangeNotifier {
     });
   }
 
+  void _toast(String msg) => showToast(msg);
+
   @override
   void dispose() {
     _saveTimer?.cancel();
     _lifecycle?.dispose();
+    selection.dispose();
     super.dispose();
   }
 }
