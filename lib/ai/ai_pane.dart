@@ -86,6 +86,7 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
     if (_backend == AiBackendKind.inAppWebView) {
       AiWebView.onLoadChanged = _onLoadChanged;
       AiWebView.onPromptResult = _onPromptResult;
+      AiWebView.onSubmitResult = _onSubmitResult;
       // 平台视图不需要等布局，直接建
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _ensureInAppWebView();
@@ -97,6 +98,7 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
       WidgetsBinding.instance.addObserver(this);
       AiPanelNative.onLoadChanged = _onLoadChanged;
       AiPanelNative.onPromptResult = _onPromptResult;
+      AiPanelNative.onSubmitResult = _onSubmitResult;
       // 第一次布局完成后才知道占位区在哪
       WidgetsBinding.instance.addPostFrameCallback((_) => _syncNative());
     }
@@ -112,12 +114,18 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
       if (AiWebView.onPromptResult == _onPromptResult) {
         AiWebView.onPromptResult = null;
       }
+      if (AiWebView.onSubmitResult == _onSubmitResult) {
+        AiWebView.onSubmitResult = null;
+      }
     } else if (_isNative) {
       if (AiPanelNative.onLoadChanged == _onLoadChanged) {
         AiPanelNative.onLoadChanged = null;
       }
       if (AiPanelNative.onPromptResult == _onPromptResult) {
         AiPanelNative.onPromptResult = null;
+      }
+      if (AiPanelNative.onSubmitResult == _onSubmitResult) {
+        AiPanelNative.onSubmitResult = null;
       }
       WidgetsBinding.instance.removeObserver(this);
       // 面板关掉只是隐藏原生网页：登录态与对话内容都留着，重开即用。
@@ -155,10 +163,11 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
       AiWebView.ensure(kDeepSeekUrl);
       // 新对话要先导航，填内容由 webview 在 onPageFinished 后补上
       AiWebView.askInNewChat(ask.text, submit: ask.submit);
-      s.showToast(
-        ask.submit ? '已在新对话里提问…' : '已把内容放进新对话的输入框',
-        duration: const Duration(seconds: 4),
-      );
+      // submit 的成败由 onSubmitResult 复查后如实提示
+      if (!ask.submit) {
+        s.showToast('已把内容放进新对话的输入框',
+            duration: const Duration(seconds: 4));
+      }
       return;
     }
 
@@ -177,10 +186,11 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
       s.aiPendingAsk ??= ask;
       return;
     }
-    s.showToast(
-      ask.submit ? '已在新对话里提问…' : '已把内容放进新对话的输入框',
-      duration: const Duration(seconds: 4),
-    );
+    if (!ask.submit) {
+      s.showToast('已把内容放进新对话的输入框',
+          duration: const Duration(seconds: 4));
+    }
+    // submit 的情况等原生复查（submitResult）后再提示
   }
 
   // ---------------------------------------------------------- 应用内 WebView
@@ -280,6 +290,15 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
       // 就绪后要把原生网页显示出来（首次加载时它一直是隐藏的）
       WidgetsBinding.instance.addPostFrameCallback((_) => _syncNative());
     }
+  }
+
+  /// 「直接提问」的复查结果：没发出去就如实说，别让用户以为已经问了
+  void _onSubmitResult(bool sent) {
+    if (!mounted) return;
+    s.showToast(
+      sent ? '已在新对话里提问…' : '内容已放进输入框，自动发送没成功（请手动点发送）',
+      duration: const Duration(seconds: 5),
+    );
   }
 
   void _onPromptResult(bool ok, String? error) {

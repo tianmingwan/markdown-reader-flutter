@@ -100,32 +100,71 @@ String aiFillScript(String text) {
 /// 找不到 textarea（站点改版）时退而尝试点发送按钮。
 /// 返回是否"至少尝试发送了"——真伪由用户在面板里直接看到（消息进了对话就说明成功）。
 String aiSubmitScript() {
-  // 优先点真实的发送按钮：合成 Enter 事件 DeepSeek 的 React 不吃（真机实测），
-  // 找不到按钮再退回合成 Enter。几何筛选用于避开输入框左边的「深度思考/智能搜索」。
+  // 点真实的发送按钮（合成 Enter 事件 DeepSeek 的 React 不吃，真机实测）；
+  // 关键：填完的那一刻发送按钮往往还是 disabled（React 还没更新），所以脚本
+  // **自己在页面里轮询重试**：每 500ms 复查一次，输入框空了就说明发出去了。
   return r'''
 (function(){
   try{
-    var el=document.querySelector('textarea:not([readonly]):not([disabled])')||document.querySelector('div[contenteditable="true"]');
-    if(!el)return false;el.focus();
-    var sels=['button[type="submit"]','[data-testid*="send" i]','button[aria-label*="发送"]','button[aria-label*="Send" i]','[role="button"][aria-label*="发送"]','[role="button"][aria-label*="Send" i]'];
-    var btn=null,i;
-    for(i=0;i<sels.length&&!btn;i++){btn=document.querySelector(sels[i]);}
-    if(!btn){
+    var TRIES=6;
+    function input(){
+      return document.querySelector('textarea:not([readonly]):not([disabled])')
+          || document.querySelector('div[contenteditable="true"]');
+    }
+    function val(el){ return el ? String((el.value!==undefined?el.value:el.textContent)||'') : ''; }
+    function usable(b){
+      return !!b && !b.disabled && b.getAttribute('aria-disabled')!=='true'
+             && b.getBoundingClientRect().width>0;
+    }
+    function findButton(el){
+      var sels=['button[type="submit"]','[data-testid*="send" i]','button[aria-label*="发送"]','button[aria-label*="Send" i]','[role="button"][aria-label*="发送"]','[role="button"][aria-label*="Send" i]'];
+      for(var i=0;i<sels.length;i++){var b=document.querySelector(sels[i]); if(usable(b)) return b;}
       var box=el.closest('form')||el.parentElement;
-      for(var up=0;up<4&&box&&!btn;up++){
+      for(var up=0;up<4&&box;up++){
         var nodes=box.querySelectorAll('button,[role="button"]'),br=box.getBoundingClientRect();
         for(var k=nodes.length-1;k>=0;k--){
           var n=nodes[k];
-          if(n.disabled)continue;
+          if(!usable(n)) continue;
           var r=n.getBoundingClientRect();
-          if(r.width>0&&r.left>br.left+br.width*0.6&&n.querySelector('svg')){btn=n;break;}
+          if(r.left>br.left+br.width*0.6 && n.querySelector('svg')) return n;
         }
         box=box.parentElement;
       }
+      return null;
     }
-    if(btn){btn.click();return true;}
-    ['keydown','keypress','keyup'].forEach(function(t){el.dispatchEvent(new KeyboardEvent(t,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));});
-    return true;
+    var tries=0;
+    function attempt(){
+      var el=input();
+      var text=val(el).trim();
+      if(!text) return true;              // 输入框空了 = 已经发出去
+      if(tries>=TRIES) return false;
+      tries++;
+      var btn=findButton(el);
+      if(btn){ btn.click(); }
+      else{
+        el.focus();
+        ['keydown','keypress','keyup'].forEach(function(t){
+          el.dispatchEvent(new KeyboardEvent(t,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));
+        });
+      }
+      setTimeout(attempt, 500);           // 半秒后复查：内容还在就再试
+      return true;
+    }
+    return attempt();
+  }catch(e){return false;}
+})();''';
+}
+
+/// 复查提问是否真的发出去了（输入框被清空即视为已发送），用于如实提示用户。
+String aiSubmitVerifyScript() {
+  return r'''
+(function(){
+  try{
+    var el=document.querySelector('textarea:not([readonly]):not([disabled])')
+        || document.querySelector('div[contenteditable="true"]');
+    if(!el) return true;                  // 找不到输入框，按"已离开输入态"处理
+    var v=String((el.value!==undefined?el.value:el.textContent)||'').trim();
+    return v.length===0;
   }catch(e){return false;}
 })();''';
 }

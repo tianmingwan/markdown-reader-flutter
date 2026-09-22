@@ -32,6 +32,9 @@ class AiWebView {
   /// 「带入提问框」结果回调：ok=false 时由 Dart 退化成复制到剪贴板
   static void Function(bool ok, String? error)? onPromptResult;
 
+  /// 「直接提问」的复查结果：sent=false 表示内容进了输入框但没发出去
+  static void Function(bool sent)? onSubmitResult;
+
   static bool get hasController => _controller != null;
 
   /// 文本缩放百分比（安卓用 setTextZoom，100 = 原始大小）
@@ -62,6 +65,9 @@ class AiWebView {
               onLoadChanged?.call(AiLoadEvent(state: 'started', uri: u)),
           onPageFinished: (u) {
             onLoadChanged?.call(AiLoadEvent(state: 'finished', uri: u));
+            // 只有当完成的就是我们想去的那一页时才补填，避免"旧页面晚到的
+            // finished 事件"把内容填进上一个对话
+            if (_loadedUrl != null && u != _loadedUrl) return;
             // 新对话刚加载完：把挂起的提问补进去（DeepSeek 是 SPA，稍等它水合）
             final pending = _pendingText;
             if (pending != null) {
@@ -126,8 +132,18 @@ class AiWebView {
         return false;
       }
       if (submit) {
+        // 发送脚本在页面内部自己轮询重试；这里等它跑完再复查一次是否真的发出去
         await c.runJavaScriptReturningResult(aiSubmitScript());
         onPromptResult?.call(true, null);
+        Future<void>.delayed(const Duration(milliseconds: 2600), () async {
+          try {
+            final r =
+                await c.runJavaScriptReturningResult(aiSubmitVerifyScript());
+            onSubmitResult?.call(_truthy(r));
+          } catch (_) {
+            onSubmitResult?.call(false);
+          }
+        });
         return true;
       }
       onPromptResult?.call(true, null);
@@ -172,6 +188,7 @@ class AiWebView {
     _textZoom = 100;
     onLoadChanged = null;
     onPromptResult = null;
+    onSubmitResult = null;
   }
 }
 

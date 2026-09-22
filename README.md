@@ -74,7 +74,9 @@ macOS `libmdreader_core.dylib`；Android 交给系统从 APK 的 `lib/<abi>/` �
 
 **已发布版本**：
 
-- **v0.2.2**（最新）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.2>
+- **v0.2.3**（最新）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.3>
+  —— 修 Linux 端"放进去不搜"（发送脚本自轮询重试 + 开新对话次序 + 发送结果复查）
+- v0.2.2：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.2>
   —— 右侧 AI 搜索分栏 + 选中内容送进内置 DeepSeek（新对话直接提问 / 只放进输入框）
   + 选中菜单清掉系统与第三方的"文本处理"项。产物：`mdreader-flutter-android.apk` 61.1 MB /
   `mdreader-flutter-linux-x64.tar.gz` 11.3 MB / `mdreader-flutter-windows-x64.zip` 12.6 MB /
@@ -264,6 +266,13 @@ Linux 路径（Dart 决定布局，原生只负责贴上去）
 1. **新对话 + 直接提问**：开新对话 → 把选中内容放进输入框 → **自动发送** → 直接出结果。
    发送是**点 DeepSeek 真实的发送按钮**（几何筛选：只挑输入框右半边的按钮，避开
    「深度思考 / 智能搜索」）；实测合成 Enter 事件 React 不吃，只作为兜底。
+   **两个踩过的坑（都已修）**：
+   - *刚填完时发送按钮还是 disabled*（React 尚未更新），立刻点会静默失败 →
+     发送脚本改为**在页面内每 500ms 轮询重试**，输入框被清空即视为已发出；
+   - *开新对话的次序*：必须先挂待办再导航，等**新对话加载完成**才补填；
+     早期版本是先往当前页面填、再导航，结果内容被发进了**上一个**对话，新对话是空的。
+   发送后再复查一次输入框是否已清空（`submitResult` 事件），没发出去就如实提示
+   「内容已放进输入框，自动发送没成功（请手动点发送）」，不让用户误以为已经问过了。
 2. **新对话 + 只放进输入框**：开新对话 → 内容停在输入框里，自己改完再手动发。
 
 入口有两个：阅读区**选中菜单**（`contextMenuBuilder`，标签「问 DeepSeek」/「放进 DeepSeek」）

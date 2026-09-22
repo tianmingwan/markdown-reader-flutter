@@ -85,32 +85,71 @@ std::string BuildFillScript(const std::string& text) {
 // 把已填好的提问发出去（"新对话 + 直接提问"用）：DeepSeek 的输入框按 Enter 即发送
 // （Shift+Enter 才是换行），所以派发一组 Enter 键盘事件；找不到 textarea 时退而点发送按钮。
 std::string BuildSubmitScript() {
-  // 优先点真实的发送按钮：合成 Enter 事件 DeepSeek 的 React 不吃（真机实测）；
-  // 找不到按钮再退回合成 Enter。几何筛选用于避开输入框左边的「深度思考/智能搜索」。
+  // 点真实的发送按钮（合成 Enter 事件 DeepSeek 的 React 不吃，真机实测）；
+  // 关键：刚填完时发送按钮往往还是 disabled（React 还没更新），所以脚本
+  // **自己在页面里轮询重试**：每 500ms 复查，输入框空了就说明发出去了。
   return R"JS(
 (function(){
   try{
-    var el=document.querySelector('textarea:not([readonly]):not([disabled])')||document.querySelector('div[contenteditable="true"]');
-    if(!el)return false;el.focus();
-    var sels=['button[type="submit"]','[data-testid*="send" i]','button[aria-label*="发送"]','button[aria-label*="Send" i]','[role="button"][aria-label*="发送"]','[role="button"][aria-label*="Send" i]'];
-    var btn=null,i;
-    for(i=0;i<sels.length&&!btn;i++){btn=document.querySelector(sels[i]);}
-    if(!btn){
+    var TRIES=6;
+    function input(){
+      return document.querySelector('textarea:not([readonly]):not([disabled])')
+          || document.querySelector('div[contenteditable="true"]');
+    }
+    function val(el){ return el ? String((el.value!==undefined?el.value:el.textContent)||'') : ''; }
+    function usable(b){
+      return !!b && !b.disabled && b.getAttribute('aria-disabled')!=='true'
+             && b.getBoundingClientRect().width>0;
+    }
+    function findButton(el){
+      var sels=['button[type="submit"]','[data-testid*="send" i]','button[aria-label*="发送"]','button[aria-label*="Send" i]','[role="button"][aria-label*="发送"]','[role="button"][aria-label*="Send" i]'];
+      for(var i=0;i<sels.length;i++){var b=document.querySelector(sels[i]); if(usable(b)) return b;}
       var box=el.closest('form')||el.parentElement;
-      for(var up=0;up<4&&box&&!btn;up++){
+      for(var up=0;up<4&&box;up++){
         var nodes=box.querySelectorAll('button,[role="button"]'),br=box.getBoundingClientRect();
         for(var k=nodes.length-1;k>=0;k--){
           var n=nodes[k];
-          if(n.disabled)continue;
+          if(!usable(n)) continue;
           var r=n.getBoundingClientRect();
-          if(r.width>0&&r.left>br.left+br.width*0.6&&n.querySelector('svg')){btn=n;break;}
+          if(r.left>br.left+br.width*0.6 && n.querySelector('svg')) return n;
         }
         box=box.parentElement;
       }
+      return null;
     }
-    if(btn){btn.click();return true;}
-    ['keydown','keypress','keyup'].forEach(function(t){el.dispatchEvent(new KeyboardEvent(t,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));});
-    return true;
+    var tries=0;
+    function attempt(){
+      var el=input();
+      var text=val(el).trim();
+      if(!text) return true;
+      if(tries>=TRIES) return false;
+      tries++;
+      var btn=findButton(el);
+      if(btn){ btn.click(); }
+      else{
+        el.focus();
+        ['keydown','keypress','keyup'].forEach(function(t){
+          el.dispatchEvent(new KeyboardEvent(t,{key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true}));
+        });
+      }
+      setTimeout(attempt, 500);
+      return true;
+    }
+    return attempt();
+  }catch(e){return false;}
+})();)JS";
+}
+
+// 复查提问是否真的发出去了（输入框被清空即视为已发送），用于如实提示
+std::string BuildSubmitVerifyScript() {
+  return R"JS(
+(function(){
+  try{
+    var el=document.querySelector('textarea:not([readonly]):not([disabled])')
+        || document.querySelector('div[contenteditable="true"]');
+    if(!el) return true;
+    var v=String((el.value!==undefined?el.value:el.textContent)||'').trim();
+    return v.length===0;
   }catch(e){return false;}
 })();)JS";
 }
@@ -270,11 +309,17 @@ void AiPanel::HandleMethodCall(FlMethodCall* method_call) {
       fl_method_call_respond(method_call, OkBool(false), nullptr);
       return;
     }
-    SetPendingPrompt(text, ArgBool(args, "submit", false));
+    const bool submit = ArgBool(args, "submit", false);
     if (ArgBool(args, "newChat", false)) {
-      // 回到聊天根路径 = 开一个新对话；pending 会在加载完成后自动补填
+      // 开新对话：**先别往当前页面里填**（否则内容会发进上一个对话），
+      // 只挂上待办、标记页面未就绪，导航到聊天根路径，等加载完成后再补填。
+      pending_prompt_ = text;
+      pending_submit_ = submit;
+      inject_attempts_ = 0;
       page_ready_ = false;
       webkit_web_view_load_uri(WEBKIT_WEB_VIEW(webview_), kDefaultUrl);
+    } else {
+      SetPendingPrompt(text, submit);
     }
     fl_method_call_respond(method_call, OkBool(true), nullptr);
     return;
@@ -486,11 +531,41 @@ void AiPanel::InjectNow() {
           self->pending_submit_ = false;
           self->inject_attempts_ = 0;
           if (submit) {
-            // "新对话 + 直接提问"：填完就把消息发出去
+            // "新对话 + 直接提问"：脚本内部会自己轮询重试（按钮刚填完时可能还 disabled），
+            // 2.6 秒后复查输入框是否已清空，把"到底发出去没有"如实回报给 Dart。
             webkit_web_view_evaluate_javascript(
                 WEBKIT_WEB_VIEW(self->webview_),
                 BuildSubmitScript().c_str(), -1, nullptr, nullptr, nullptr,
                 nullptr, nullptr);
+            g_timeout_add(
+                2600,
+                +[](gpointer data) -> gboolean {
+                  auto* self = static_cast<AiPanel*>(data);
+                  if (self->webview_ == nullptr) return G_SOURCE_REMOVE;
+                  webkit_web_view_evaluate_javascript(
+                      WEBKIT_WEB_VIEW(self->webview_),
+                      BuildSubmitVerifyScript().c_str(), -1, nullptr, nullptr,
+                      nullptr,
+                      +[](GObject* source, GAsyncResult* result,
+                          gpointer user) {
+                        auto* panel = static_cast<AiPanel*>(user);
+                        g_autoptr(GError) error = nullptr;
+                        g_autoptr(JSCValue) value =
+                            webkit_web_view_evaluate_javascript_finish(
+                                WEBKIT_WEB_VIEW(source), result, &error);
+                        bool sent = false;
+                        if (value != nullptr && jsc_value_is_boolean(value)) {
+                          sent = jsc_value_to_boolean(value);
+                        }
+                        FlValue* m = fl_value_new_map();
+                        fl_value_set_string_take(m, "sent",
+                                                 fl_value_new_bool(sent));
+                        panel->Emit("submitResult", m);
+                      },
+                      self);
+                  return G_SOURCE_REMOVE;
+                },
+                self);
           }
           FlValue* m = fl_value_new_map();
           fl_value_set_string_take(m, "ok", fl_value_new_bool(true));

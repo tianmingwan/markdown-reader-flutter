@@ -26,6 +26,9 @@ class AiPanelNative {
   /// 「带入提问框」结果回调：ok=false 时由 Dart 退化成复制到剪贴板
   static void Function(bool ok, String? error)? onPromptResult;
 
+  /// 「直接提问」的复查结果：sent=false 表示内容进了输入框但没发出去
+  static void Function(bool sent)? onSubmitResult;
+
   static bool _handlerInstalled = false;
 
   /// 非 Linux 平台不必尝试调用原生通道（通道只存在于 Linux runner）。
@@ -51,6 +54,9 @@ class AiPanelNative {
             args['ok'] == true,
             args['error'] as String?,
           );
+          break;
+        case 'submitResult':
+          onSubmitResult?.call(args['sent'] == true);
           break;
       }
       return null;
