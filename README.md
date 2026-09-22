@@ -72,7 +72,18 @@ macOS `libmdreader_core.dylib`；Android 交给系统从 APK 的 `lib/<abi>/` �
 
 三平台由 `.github/workflows/build.yml` 构建：推送 `main` 触发构建，打 `v*` 标签自动创建 Release 并附上全部产物。
 
-**已发布版本**：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.1.0>
+**已发布版本**：
+
+- **v0.2.0**（含右侧 AI 搜索分栏）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.0>
+  —— `mdreader-flutter-android.apk` 61 MB / `mdreader-flutter-linux-x64.tar.gz` 11.3 MB /
+  `mdreader-flutter-windows-x64.zip` 12.6 MB / `mdreader-flutter_0.2.0_amd64.deb` 9.2 MB
+- v0.1.0：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.1.0>
+
+> ⚠️ **CI 产物与本机构建签名不同**：`android/app/build.gradle.kts` 的 release 目前用
+> `signingConfigs.getByName("debug")`，而 CI runner 的 debug keystore 与本机不是同一份。
+> 所以**用 CI 的 APK 覆盖本机构建的安装会报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`**，
+> 需要先 `adb uninstall com.chensdong.mdreaderflutter`（会清掉登录态与会话）再装。
+> 想保留平板上的数据，就在本地 `flutter build apk --release` 后覆盖安装。
 
 | 附件 | 大小 |
 |---|---|
