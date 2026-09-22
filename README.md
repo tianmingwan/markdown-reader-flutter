@@ -74,9 +74,12 @@ macOS `libmdreader_core.dylib`；Android 交给系统从 APK 的 `lib/<abi>/` �
 
 **已发布版本**：
 
-- **v0.2.0**（含右侧 AI 搜索分栏）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.0>
-  —— `mdreader-flutter-android.apk` 61 MB / `mdreader-flutter-linux-x64.tar.gz` 11.3 MB /
-  `mdreader-flutter-windows-x64.zip` 12.6 MB / `mdreader-flutter_0.2.0_amd64.deb` 9.2 MB
+- **v0.2.2**（最新）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.2>
+  —— 右侧 AI 搜索分栏 + 选中内容送进内置 DeepSeek（新对话直接提问 / 只放进输入框）
+  + 选中菜单清掉系统与第三方的"文本处理"项。产物：`mdreader-flutter-android.apk` 61.1 MB /
+  `mdreader-flutter-linux-x64.tar.gz` 11.3 MB / `mdreader-flutter-windows-x64.zip` 12.6 MB /
+  `mdreader-flutter_0.2.2_amd64.deb` 9.2 MB
+- v0.2.0（首个带 AI 分栏的版本）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.0>
 - v0.1.0：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.1.0>
 
 > ⚠️ **CI 产物与本机构建签名不同**：`android/app/build.gradle.kts` 的 release 目前用
