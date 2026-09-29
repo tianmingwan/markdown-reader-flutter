@@ -74,7 +74,13 @@ macOS `libmdreader_core.dylib`；Android 交给系统从 APK 的 `lib/<abi>/` �
 
 **已发布版本**：
 
-- **v0.2.4**（最新）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.4>
+- **v0.3.0**（最新）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.3.0>
+  —— 修 AI 面板在 4K/HiDPI 屏永远停在「正在调整宽度…」（坐标系误乘 `devicePixelRatio`，
+  网页被推出窗口可见区）+ Markdown 渲染改版 + 最近文件夹下拉与按文件夹记忆工作区
+  + `Ctrl+P` 快速打开 / 大纲面板 / 中键与 `Ctrl+W` 关标签 / AI 面板站点切换。
+  产物：`mdreader-flutter-android.apk` 61.3 MB / `mdreader-flutter-linux-x64.tar.gz` 11.5 MB /
+  `mdreader-flutter-windows-x64.zip` 12.7 MB / `mdreader-flutter_0.3.0_amd64.deb` 9.3 MB
+- v0.2.4：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.4>
   —— 修 Linux(WebKitGTK) 端填充不生效（改用 execCommand）+ 填充结果如实上报，
   加上开新对话次序与发送时机/复查
 - v0.2.3：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.2.3>
