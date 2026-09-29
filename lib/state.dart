@@ -21,6 +21,8 @@ class TabItem {
   double scrollRatio;
   /// 由搜索结果打开时置位：文档就绪后滚动到首个命中块
   bool seekPending = false;
+  /// 由大纲（TOC）点击置位：文档就绪后滚动到该顶层块（按比例近似定位）
+  int? seekBlockIndex;
   TabItem({
     required this.path,
     required this.name,
@@ -29,6 +31,7 @@ class TabItem {
     this.loading = false,
     this.scrollRatio = 0,
     this.seekPending = false,
+    this.seekBlockIndex,
   });
 }
 
@@ -67,6 +70,9 @@ class AppState extends ChangeNotifier {
   /// 当前搜索词：正文与搜索摘要都用它做红色高亮
   String? highlightQuery;
 
+  /// 大纲（TOC）面板是否打开（与搜索面板互斥，共用侧栏位置）
+  bool outlineOpen = false;
+
   bool sidebarOpen = true;
   String? toast;
 
@@ -88,6 +94,26 @@ class AppState extends ChangeNotifier {
   /// AI 面板是否打开（右侧内嵌 DeepSeek）
   bool aiOpen = false;
   double aiWidth = aiPaneDefaultWidth;
+
+  /// AI 面板支持的站点预设（名称 → 根 URL；根路径即「新对话」）
+  static const Map<String, String> aiSites = {
+    'DeepSeek': 'https://chat.deepseek.com/',
+    'Kimi': 'https://www.kimi.com/',
+    '豆包': 'https://www.doubao.com/chat/',
+    'ChatGPT': 'https://chatgpt.com/',
+  };
+
+  /// 面板当前加载的站点（默认 DeepSeek；切换后整页重新加载，
+  /// 「带入提问框」用的是通用 textarea/contenteditable 选择器，主流站点都能填）
+  String aiBaseUrl = aiSites['DeepSeek']!;
+
+  void setAiBaseUrl(String url) {
+    if (url == aiBaseUrl) return;
+    aiBaseUrl = url;
+    session.aiBaseUrl = url;
+    _scheduleSave();
+    notifyListeners();
+  }
 
   /// 正在拖动分栏：拖动期间要藏起原生网页，否则指针事件被它吃掉
   bool aiDragging = false;
@@ -240,6 +266,8 @@ class AppState extends ChangeNotifier {
           .toDouble()
           .clamp(aiPaneMinWidth, aiPaneMaxWidth)
           .toDouble();
+      final savedUrl = session.aiBaseUrl;
+      if (savedUrl != null && savedUrl.isNotEmpty) aiBaseUrl = savedUrl;
     } catch (e) {
       _toast('会话读取失败：$e');
     }
@@ -251,6 +279,12 @@ class AppState extends ChangeNotifier {
       session.aiPanelOpen = true;
       session.aiPanelWidth = aiWidth.round();
       _scheduleSave();
+      notifyListeners();
+    }
+
+    // 可选：启动即打开大纲面板（自动化验证 / 手动调试用）
+    if (Platform.environment['MDREADER_OUTLINE'] == '1') {
+      outlineOpen = true;
       notifyListeners();
     }
 
@@ -288,6 +322,7 @@ class AppState extends ChangeNotifier {
   // ------------------------------------------------------------ 打开 / 扫描
 
   Future<void> openRoot(String path, {String? restoreFile}) async {
+    if (root != null && root != path) _saveWorkspace(); // 切走前记住旧文件夹的标签组
     scanning = true;
     root = path;
     notifyListeners();
@@ -315,10 +350,38 @@ class AppState extends ChangeNotifier {
 
     if (restoreFile != null && File(restoreFile).existsSync()) {
       await openTab(restoreFile, ratio: session.filePositions[_posKey(restoreFile)]);
-    } else {
-      final first = _firstMd(tree?.children ?? const []);
-      if (first != null) await openTab(first);
+      return;
     }
+    // 切回旧文件夹：恢复它上次的工作区（标签组 + 活动标签）；
+    // 其它文件夹的标签继续留着，不受影响
+    final ws = session.workspaces[path];
+    final toOpen = (ws?.tabs ?? const <String>[])
+        .where((p) => File(p).existsSync())
+        .toList();
+    if (toOpen.isNotEmpty) {
+      for (final p in toOpen) {
+        await openTab(p);
+      }
+      final want = ws?.active;
+      final idx = want == null ? -1 : tabs.indexWhere((t) => t.path == want);
+      activate(idx >= 0 ? idx : tabs.length - 1);
+      return;
+    }
+    final first = _firstMd(tree?.children ?? const []);
+    if (first != null) await openTab(first);
+  }
+
+  /// 把当前 root 的标签组/活动标签写进会话（切走与标签变动时调用）
+  void _saveWorkspace() {
+    final r = root;
+    if (r == null) return;
+    final own = tabs.where((t) => t.path.startsWith('$r/')).toList();
+    final cur = active;
+    session.workspaces[r] = RootWorkspace(
+      tabs: own.map((t) => t.path).toList(),
+      active: cur != null && cur.path.startsWith('$r/') ? cur.path : null,
+    );
+    _scheduleSave();
   }
 
   Future<void> refreshTree() async {
@@ -377,7 +440,7 @@ class AppState extends ChangeNotifier {
     tabs.add(tab);
     activeIndex = tabs.length - 1;
     session.lastFile = path;
-    _scheduleSave();
+    _saveWorkspace();
     notifyListeners();
 
     final tOpen = DateTime.now();
@@ -450,6 +513,7 @@ class AppState extends ChangeNotifier {
     } else if (i < activeIndex) {
       activeIndex--;
     }
+    _saveWorkspace();
     notifyListeners();
   }
 
@@ -462,6 +526,7 @@ class AppState extends ChangeNotifier {
       openTab(t.path);
       return;
     }
+    _saveWorkspace();
     notifyListeners();
   }
 
@@ -531,6 +596,7 @@ class AppState extends ChangeNotifier {
   /// 快捷键用：显式打开搜索面板（幂等）
   void openSearch() {
     searchOpen = true;
+    outlineOpen = false; // 与大纲面板共用侧栏位置，互斥
     notifyListeners();
   }
 
@@ -581,6 +647,38 @@ class AppState extends ChangeNotifier {
     }
     if (seq == searchSeq) searching = false;
     notifyListeners();
+  }
+
+  // ------------------------------------------------------------ 大纲（TOC）
+
+  void toggleOutline() {
+    outlineOpen = !outlineOpen;
+    if (outlineOpen) searchOpen = false; // 与搜索面板共用侧栏位置，互斥
+    notifyListeners();
+  }
+
+  /// 大纲点击：跳到当前标签的第 blockIndex 个顶层块（ReadView 按比例近似定位）
+  void seekToBlock(int blockIndex) {
+    final t = active;
+    if (t == null) return;
+    t.seekBlockIndex = blockIndex;
+    notifyListeners();
+  }
+
+  /// 拍平目录树（快速打开 Ctrl+P 用）：返回全部文件节点
+  List<TreeNode> flatFiles() {
+    final out = <TreeNode>[];
+    void walk(List<TreeNode> ns) {
+      for (final n in ns) {
+        if (n.isDir) {
+          walk(n.children);
+        } else {
+          out.add(n);
+        }
+      }
+    }
+    walk(tree?.children ?? const []);
+    return out;
   }
 
   // ------------------------------------------------------------ 会话落盘

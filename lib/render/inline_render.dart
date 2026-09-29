@@ -17,6 +17,12 @@ class MdStyle {
   final Color codeBg;
   final Color quoteBar;
   final Color chipBg;
+  /// 引用块底色（与左边条配合，让引用在正文里一眼可辨）
+  final Color quoteBg;
+  /// 表格斑马纹（偶数数据行）
+  final Color zebraBg;
+  /// 主题强调色：列表符号、任务勾选框、标题装饰等的小面积点缀
+  final Color accent;
   /// 公式（TeX）未接渲染器时的呈现色；接入 KaTeX 类渲染器后此色仅作占位
   final Color mathFg;
   /// 当前搜索词：命中片段用红色高亮（正文与搜索摘要共用）
@@ -34,6 +40,9 @@ class MdStyle {
     required this.codeBg,
     required this.quoteBar,
     required this.chipBg,
+    required this.quoteBg,
+    required this.zebraBg,
+    required this.accent,
     required this.mathFg,
     this.highlight,
     this.markBg = const Color(0xFFFFD5D5),
@@ -50,8 +59,11 @@ class MdStyle {
       link: dark ? const Color(0xFF6CB6FF) : const Color(0xFF0969DA),
       border: dark ? const Color(0xFF3A3F45) : const Color(0xFFD8DEE4),
       codeBg: dark ? const Color(0xFF22272E) : const Color(0xFFF2F4F7),
-      quoteBar: dark ? const Color(0xFF4A5158) : const Color(0xFFCBD3DB),
+      quoteBar: dark ? const Color(0xFF6B7684) : const Color(0xFF9AA5B1),
       chipBg: dark ? const Color(0xFF2A2F35) : const Color(0xFFEEF1F4),
+      quoteBg: dark ? const Color(0xFF21262D) : const Color(0xFFF6F8FA),
+      zebraBg: dark ? const Color(0xFF1F242A) : const Color(0xFFF6F8FA),
+      accent: Theme.of(ctx).colorScheme.primary,
       mathFg: dark ? const Color(0xFFB7A6FF) : const Color(0xFF6B4FBB),
       highlight: (highlight == null || highlight.isEmpty) ? null : highlight,
       markBg: dark ? const Color(0xFF5C1A1A) : const Color(0xFFFFD5D5),
@@ -59,16 +71,19 @@ class MdStyle {
     );
   }
 
-  MdStyle copyWith({double? fontSize}) => MdStyle(
+  MdStyle copyWith({double? fontSize, Color? text}) => MdStyle(
         dark: dark,
         fontSize: fontSize ?? this.fontSize,
-        text: text,
+        text: text ?? this.text,
         muted: muted,
         link: link,
         border: border,
         codeBg: codeBg,
         quoteBar: quoteBar,
         chipBg: chipBg,
+        quoteBg: quoteBg,
+        zebraBg: zebraBg,
+        accent: accent,
         mathFg: mathFg,
         highlight: highlight,
         markBg: markBg,
@@ -146,9 +161,13 @@ List<InlineSpan> _spans(
       case InlSoftBr():
         out.add(TextSpan(text: ' ', style: style));
       case InlTask(:final checked):
+        // 勾选框小面积上色：已完成用强调色、未完成用灰，扫一眼就能分出状态
         out.add(TextSpan(
           text: checked ? '☑ ' : '☐ ',
-          style: style.copyWith(color: st.muted),
+          style: style.copyWith(
+            color: checked ? st.accent : st.muted,
+            fontWeight: checked ? FontWeight.w700 : null,
+          ),
         ));
     }
   }
@@ -276,7 +295,8 @@ void _pushTextWithMath(
   }
 }
 
-/// 图片内联：本地绝对路径读文件，远程走网络
+/// 图片内联：本地绝对路径读文件，远程走网络。
+/// 圆角 + 细边框让图片从正文里「立」起来；alt 非空时附一行说明文字。
 List<InlineSpan> imageSpanOf(String src, String alt, MdStyle st,
     [double maxWidth = 900]) {
   final isRemote = src.startsWith('http://') || src.startsWith('https://');
@@ -295,10 +315,32 @@ List<InlineSpan> imageSpanOf(String src, String alt, MdStyle st,
     WidgetSpan(
       alignment: PlaceholderAlignment.middle,
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         child: ConstrainedBox(
           constraints: BoxConstraints(maxWidth: maxWidth),
-          child: img,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  border: Border.all(color: st.border),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: img,
+              ),
+              if (alt.trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4, left: 2),
+                  child: Text(
+                    alt,
+                    style:
+                        TextStyle(fontSize: st.fontSize * 0.82, color: st.muted),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     ),

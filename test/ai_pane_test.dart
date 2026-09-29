@@ -5,10 +5,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'dart:io';
+
 import 'package:mdreader_flutter/ai/ai_pane.dart';
 import 'package:mdreader_flutter/app.dart' show filteredSelectionMenuItems;
 import 'package:mdreader_flutter/ai/ai_types.dart';
 import 'package:mdreader_flutter/core/ai_panel_native.dart';
+import 'package:mdreader_flutter/core/native.dart';
 import 'package:mdreader_flutter/state.dart';
 
 const MethodChannel channel = MethodChannel('mdreader/ai_panel');
@@ -69,23 +72,29 @@ void main() {
     AiPanelNative.availability = AiPaneAvailability.unknown;
     AiPanelNative.onLoadChanged = null;
     AiPanelNative.onPromptResult = null;
+    // AppState 的会话保存有 800ms 防抖：不指到临时目录的话，
+    // 测试结束前后会把几乎空白的会话写进真实的 session.json
+    NativeCore.configDirOverride =
+        Directory.systemTemp.createTempSync('mdreader_aipane').path;
   });
 
   tearDown(() {
     fake.uninstall();
     AiPanelNative.onLoadChanged = null;
     AiPanelNative.onPromptResult = null;
+    NativeCore.configDirOverride = null;
   });
 
   group('原生通道协议', () {
-    test('open 传下去的是设备像素矩形与数据目录，成功时可用性为 ready', () async {
+    test('open 传下去的是逻辑像素矩形与数据目录，成功时可用性为 ready', () async {
       fake.responder = (c) => c.method == 'open' ? true : null;
-      final ok = await AiPanelNative.open(
+      final res = await AiPanelNative.open(
         rect: const Rect.fromLTWH(10, 20, 300, 400),
         dataDir: '/tmp/cfg/webview',
         cacheDir: '/tmp/cfg/webview-cache',
       );
-      expect(ok, isTrue);
+      expect(res.ok, isTrue);
+      expect(res.pageReady, isFalse, reason: '旧版 bool 应答没有 pageReady 信息');
       expect(AiPanelNative.availability, AiPaneAvailability.ready);
       final args = (fake.callTo('open')!.arguments as Map).cast<String, Object?>();
       expect(args['x'], 10);
@@ -97,25 +106,42 @@ void main() {
       expect(args.containsKey('prompt'), isFalse, reason: '没有上下文时不该带 prompt');
     });
 
+    test('新版 map 应答带回 pageReady（重开面板时网页早已就绪）', () async {
+      fake.responder = (c) =>
+          c.method == 'open' ? {'ok': true, 'pageReady': true} : null;
+      final res = await AiPanelNative.open(
+        rect: const Rect.fromLTWH(0, 0, 300, 400),
+        dataDir: '/tmp/a',
+        cacheDir: '/tmp/b',
+      );
+      expect(res.ok, isTrue);
+      expect(res.pageReady, isTrue);
+    });
+
+    test('切换站点走 loadUrl 通道', () async {
+      await AiPanelNative.loadUrl('https://www.kimi.com/');
+      expect(fake.callTo('loadUrl')!.arguments['url'], 'https://www.kimi.com/');
+    });
+
     test('原生回 unsupported（或没编译 WebKit）时退化为不可用，不抛异常', () async {
       fake.responder = (c) => PlatformException(code: 'unsupported');
-      final ok = await AiPanelNative.open(
+      final res = await AiPanelNative.open(
         rect: Rect.zero,
         dataDir: '/tmp/a',
         cacheDir: '/tmp/b',
       );
-      expect(ok, isFalse);
+      expect(res.ok, isFalse);
       expect(AiPanelNative.availability, AiPaneAvailability.unsupported);
     });
 
     test('平台没有这个通道时同样只返回 false', () async {
       fake.responder = (c) => MissingPluginException('no channel');
-      final ok = await AiPanelNative.open(
+      final res = await AiPanelNative.open(
         rect: Rect.zero,
         dataDir: '/tmp/a',
         cacheDir: '/tmp/b',
       );
-      expect(ok, isFalse);
+      expect(res.ok, isFalse);
       expect(AiPanelNative.availability, AiPaneAvailability.unsupported);
     });
 

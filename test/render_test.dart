@@ -244,7 +244,7 @@ void main() {
       size: 21,
     ));
     final big = headingSize();
-    expect(small, closeTo(15 * 1.62, 0.01));
+    expect(small, closeTo(15 * 1.86, 0.01));
     expect(big, greaterThan(small));
   });
 

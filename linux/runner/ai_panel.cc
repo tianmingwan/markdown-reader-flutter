@@ -16,7 +16,8 @@ namespace {
 constexpr char kChannelName[] = "mdreader/ai_panel";
 constexpr char kDefaultUrl[] = "https://chat.deepseek.com/";
 
-// 面板最小尺寸（GTK 设备像素）：比这更小就直接隐藏原生视图，避免留一条网页残片。
+// 面板最小尺寸（应用像素，即未乘缩放因子的逻辑单位，与 Dart 布局坐标一致）：
+// 比这更小就直接隐藏原生视图，避免留一条网页残片。
 constexpr int kMinPaneWidth = 120;
 constexpr int kMinPaneHeight = 60;
 
@@ -283,10 +284,32 @@ void AiPanel::HandleMethodCall(FlMethodCall* method_call) {
     y_ = static_cast<int>(ArgNum(args, "y", y_));
     width_ = static_cast<int>(ArgNum(args, "w", width_));
     height_ = static_cast<int>(ArgNum(args, "h", height_));
-    SetPaneVisible(true);
+    // 只摆放位置，不抢显隐：首次加载时保持隐藏，让 Dart 的「正在打开…」占位可见，
+    // 就绪后由 Dart 的 setVisible 决定（也避免加载期间闪一块空白网页）。
+    ApplyBounds();
     const std::string prompt = ArgStr(args, "prompt", "");
     if (!prompt.empty()) SetPendingPrompt(prompt, false);
-    fl_method_call_respond(method_call, OkBool(true), nullptr);
+    // 应答里带回 pageReady：重开面板时网页早就加载完、不会再有加载事件，
+    // Dart 据此直接置就绪态，否则头部状态会永远停在「加载中」。
+    FlValue* resp = fl_value_new_map();
+    fl_value_set_string_take(resp, "ok", fl_value_new_bool(true));
+    fl_value_set_string_take(resp, "pageReady",
+                             fl_value_new_bool(page_ready_));
+    fl_method_call_respond(method_call,
+                           FL_METHOD_RESPONSE(
+                               fl_method_success_response_new(resp)),
+                           nullptr);
+    return;
+  }
+
+  if (g_strcmp0(method, "loadUrl") == 0) {
+    // 切换 AI 站点：整页导航（pageReady 置回未就绪，等 load-changed 重新上报）
+    if (webview_ != nullptr) {
+      const std::string url = ArgStr(args, "url", kDefaultUrl);
+      page_ready_ = false;
+      webkit_web_view_load_uri(WEBKIT_WEB_VIEW(webview_), url.c_str());
+    }
+    fl_method_call_respond(method_call, OkBool(webview_ != nullptr), nullptr);
     return;
   }
 

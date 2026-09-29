@@ -10,7 +10,6 @@ import 'package:url_launcher/url_launcher.dart';
 import 'ai/ai_pane.dart';
 import 'core/android_storage.dart';
 import 'core/models.dart';
-import 'core/native.dart';
 import 'render/block_render.dart';
 import 'render/inline_render.dart';
 import 'state.dart';
@@ -23,6 +22,16 @@ class OpenSearchIntent extends Intent {
 
 class CloseSearchIntent extends Intent {
   const CloseSearchIntent();
+}
+
+/// Ctrl+P：快速打开（模糊匹配当前文件夹里的文档，大库找文件不去树上翻）
+class QuickOpenIntent extends Intent {
+  const QuickOpenIntent();
+}
+
+/// Ctrl+W：关闭当前标签
+class CloseTabIntent extends Intent {
+  const CloseTabIntent();
 }
 
 /// 过滤掉系统/第三方塞进选中菜单的「文本处理」项。
@@ -88,6 +97,10 @@ class AppShortcuts extends StatelessWidget {
         SingleActivator(LogicalKeyboardKey.escape): CloseSearchIntent(),
         SingleActivator(LogicalKeyboardKey.keyA,
             control: true, shift: true): ToggleAiIntent(),
+        SingleActivator(LogicalKeyboardKey.keyP, control: true):
+            QuickOpenIntent(),
+        SingleActivator(LogicalKeyboardKey.keyW, control: true):
+            CloseTabIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -104,10 +117,28 @@ class AppShortcuts extends StatelessWidget {
               return null;
             },
           ),
+          QuickOpenIntent: CallbackAction<QuickOpenIntent>(
+            onInvoke: (_) {
+              // 这里的 context 来自 AppShortcuts.build（在 Navigator 之下），
+              // 每次重建闭包都会拿到最新的
+              if (state.root != null) {
+                showQuickOpen(context, state);
+              }
+              return null;
+            },
+          ),
+          CloseTabIntent: CallbackAction<CloseTabIntent>(
+            onInvoke: (_) {
+              if (state.activeIndex >= 0) state.closeTab(state.activeIndex);
+              return null;
+            },
+          ),
           CloseSearchIntent: CallbackAction<CloseSearchIntent>(
             onInvoke: (_) {
               if (state.searchOpen) {
                 state.closeSearch();
+              } else if (state.outlineOpen) {
+                state.toggleOutline();
               } else if (state.highlightQuery != null) {
                 state.clearSearch();
               }
@@ -278,8 +309,10 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             width: 280,
                             child: s.searchOpen
                                 ? SearchPanel(state: s)
-                                : FileTreePanel(
-                                    state: s, onPickFolder: _pickFolder),
+                                : s.outlineOpen
+                                    ? OutlinePanel(state: s)
+                                    : FileTreePanel(
+                                        state: s, onPickFolder: _pickFolder),
                           ),
                           const VerticalDivider(width: 1),
                         ],
@@ -302,6 +335,75 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   double _aiPaneWidth(BuildContext context) =>
       s.aiPaneWidthFor(MediaQuery.of(context).size.width);
 
+  /// 打开文件夹 + 最近打开历史（换文件夹的入口：
+  /// 之前的历史只藏在欢迎页，标签一开就永远看不到，等于没有）
+  Widget _buildFolderMenu() {
+    return PopupMenuButton<String>(
+      tooltip: '打开文件夹（含最近打开）',
+      icon: const Icon(Icons.folder_open),
+      onSelected: (v) {
+        if (v == '__pick__') {
+          _pickFolder();
+        } else {
+          s.openRoot(v);
+        }
+      },
+      itemBuilder: (ctx) {
+        final t = Theme.of(ctx);
+        final items = <PopupMenuEntry<String>>[
+          const PopupMenuItem(
+            value: '__pick__',
+            child: Row(
+              children: [
+                Icon(Icons.create_new_folder_outlined, size: 16),
+                SizedBox(width: 8),
+                Text('打开文件夹…', style: TextStyle(fontSize: 12.5)),
+              ],
+            ),
+          ),
+        ];
+        final recents = s.session.recentRoots;
+        if (recents.isNotEmpty) {
+          items.add(const PopupMenuDivider());
+          for (final r in recents) {
+            final exists = Directory(r.loc).existsSync();
+            final current = s.root == r.loc;
+            items.add(PopupMenuItem(
+              value: r.loc,
+              enabled: exists && !current,
+              child: Row(
+                children: [
+                  Icon(
+                    current
+                        ? Icons.check
+                        : exists
+                            ? Icons.history
+                            : Icons.folder_off_outlined,
+                    size: 15,
+                    color: exists ? t.hintColor : t.disabledColor,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      r.loc,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: exists ? null : t.disabledColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ));
+          }
+        }
+        return items;
+      },
+    );
+  }
+
   PreferredSizeWidget _buildAppBar() {
     final t = Theme.of(context);
     return AppBar(
@@ -316,15 +418,17 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             icon: Icon(s.sidebarOpen ? Icons.menu_open : Icons.menu),
             onPressed: s.toggleSidebar,
           ),
-          IconButton(
-            tooltip: '打开文件夹',
-            icon: const Icon(Icons.folder_open),
-            onPressed: _pickFolder,
-          ),
+          _buildFolderMenu(),
           IconButton(
             tooltip: '刷新目录',
             icon: const Icon(Icons.refresh),
             onPressed: s.root == null ? null : () => s.refreshTree(),
+          ),
+          IconButton(
+            tooltip: '快速打开（Ctrl+P）',
+            icon: const Icon(Icons.bolt_outlined),
+            onPressed:
+                s.root == null ? null : () => showQuickOpen(context, s),
           ),
           IconButton(
             tooltip: '全文搜索',
@@ -336,6 +440,16 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 s.openSearch();
                 if (!s.sidebarOpen) s.toggleSidebar();
               }
+            },
+          ),
+          IconButton(
+            tooltip: s.outlineOpen ? '关闭大纲' : '大纲（按标题跳转）',
+            icon: Icon(s.outlineOpen ? Icons.toc : Icons.toc_outlined),
+            color:
+                s.outlineOpen ? Theme.of(context).colorScheme.primary : null,
+            onPressed: () {
+              s.toggleOutline();
+              if (s.outlineOpen && !s.sidebarOpen) s.toggleSidebar();
             },
           ),
           IconButton(
@@ -438,34 +552,42 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         itemBuilder: (context, i) {
           final tab = s.tabs[i];
           final active = i == s.activeIndex;
-          return InkWell(
-            onTap: () => s.activate(i),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              decoration: BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(
-                    color: active ? t.colorScheme.primary : Colors.transparent,
-                    width: 2,
-                  ),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Text(
-                    tab.name,
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-                      color: active ? t.colorScheme.primary : t.colorScheme.onSurface,
+          return Tooltip(
+            message: tab.path,
+            waitDuration: const Duration(milliseconds: 500),
+            child: GestureDetector(
+              // 桌面惯例：中键点标签直接关闭（浏览器/编辑器的肌肉记忆）
+              onTertiaryTapUp: (_) => s.closeTab(i),
+              child: InkWell(
+                onTap: () => s.activate(i),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    border: Border(
+                      bottom: BorderSide(
+                        color: active ? t.colorScheme.primary : Colors.transparent,
+                        width: 2,
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 6),
-                  InkWell(
-                    onTap: () => s.closeTab(i),
-                    child: Icon(Icons.close, size: 14, color: t.hintColor),
+                  child: Row(
+                    children: [
+                      Text(
+                        tab.name,
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: active ? FontWeight.w600 : FontWeight.w400,
+                          color: active ? t.colorScheme.primary : t.colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      InkWell(
+                        onTap: () => s.closeTab(i),
+                        child: Icon(Icons.close, size: 14, color: t.hintColor),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           );
@@ -657,10 +779,38 @@ class _ReadViewState extends State<ReadView> {
     }
     if (hit < 0) return;
 
-    final max = _ctl.position.maxScrollExtent;
-    if (max <= 0) return;
-    final target = (max * (hit / total)).clamp(0.0, max);
-    _ctl.jumpTo(target);
+    _jumpToBlock(hit, total);
+  }
+
+  /// 由大纲（TOC）点击触发：滚动到第 idx 个顶层块。
+  void _maybeOutlineSeek() {
+    final tab = widget.tab;
+    final idx = tab.seekBlockIndex;
+    if (idx == null || !_ctl.hasClients) return;
+    final doc = tab.doc;
+    if (doc == null || doc.blockCount == 0) return;
+    tab.seekBlockIndex = null;
+    _jumpToBlock(idx, doc.blockCount);
+  }
+
+  /// 按比例近似定位到某个顶层块。
+  ///
+  /// 块高不等，而 ListView 的 maxScrollExtent 首帧只是估算值（偏低），
+  /// 所以与滚动恢复一样做多轮收敛：随着总高测量变准，落点跟着收敛。
+  void _jumpToBlock(int idx, int total) {
+    final ratio = (idx / total).clamp(0.0, 1.0);
+    var pass = 0;
+    void step() {
+      if (!_ctl.hasClients || !mounted || pass >= 4) return;
+      final max = _ctl.position.maxScrollExtent;
+      if (max > 0) _ctl.jumpTo((max * ratio).clamp(0.0, max));
+      pass++;
+      if (pass < 4) {
+        Timer(const Duration(milliseconds: 80), step);
+      }
+    }
+
+    step();
   }
 
   /// 恢复滚动位置。
@@ -767,6 +917,11 @@ class _ReadViewState extends State<ReadView> {
     if (doc == null || doc.blockCount == 0) {
       return const Center(child: Text('（空文档）'));
     }
+    // 大纲点击可能发生在文档已就绪后（不会走 initState/didUpdateWidget 的钩子），
+    // 所以每次构建后都检查一次待跳转
+    if (widget.tab.seekBlockIndex != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _maybeOutlineSeek());
+    }
     final st = MdStyle.of(
       context,
       widget.state.fontSize,
@@ -774,12 +929,13 @@ class _ReadViewState extends State<ReadView> {
     );
     // 正文列宽按**实际留给阅读区的宽度**算：右侧 AI 分栏打开时不能再按整窗宽度算，
     // 否则文本会一直铺到分栏边上（列宽公式的意义就是留出两侧留白）。
+    // 上限 880：中文每行超过 ~45 字阅读效率明显下降，宽屏上宁要留白不要长行。
     final windowW = MediaQuery.of(context).size.width;
     final aiW =
         widget.state.aiOpen ? widget.state.aiPaneWidthFor(windowW) : 0.0;
     final width =
         ((windowW - aiW) * (widget.state.sidebarOpen ? 0.78 : 0.86))
-            .clamp(320.0, 1180.0);
+            .clamp(320.0, 880.0);
 
     return SelectionArea(
       // 选中文字存进 state，供 AI 面板「带入提问框」用。
@@ -1139,6 +1295,316 @@ class _SearchPanelState extends State<SearchPanel> {
                 style: TextStyle(fontSize: 12, color: t.hintColor)),
           ),
       ],
+    );
+  }
+}
+
+// ------------------------------------------------------------------ 侧栏：大纲
+
+/// 内联节点 → 纯文本（大纲条目用）
+String plainInlineText(List<MdInline> inl) {
+  final b = StringBuffer();
+  void walk(List<MdInline> xs) {
+    for (final x in xs) {
+      switch (x) {
+        case InlText(:final s):
+          b.write(s);
+        case InlCode(:final s):
+          b.write(s);
+        case InlStrong(:final inl) || InlEm(:final inl) || InlStrike(:final inl):
+          walk(inl);
+        case InlLink(:final inl):
+          walk(inl);
+        case InlImg(:final alt):
+          b.write(alt);
+        case InlBr() || InlSoftBr():
+          b.write(' ');
+        case InlTask():
+          break;
+      }
+    }
+  }
+
+  walk(inl);
+  return b.toString().trim();
+}
+
+/// 一个标题条目：顶层块下标 + 层级 + 文本
+typedef OutlineItem = ({int blockIndex, int level, String text});
+
+/// 从渲染好的文档里抽出标题序列（解析结果在 doc 内部有缓存）
+List<OutlineItem> outlineOf(RenderedDoc doc) {
+  final out = <OutlineItem>[];
+  for (var i = 0; i < doc.blockCount; i++) {
+    final b = doc.blockAt(i);
+    if (b is BlkHeading) {
+      final text = plainInlineText(b.inl);
+      if (text.isNotEmpty) out.add((blockIndex: i, level: b.level, text: text));
+    }
+  }
+  return out;
+}
+
+/// 大纲面板：列出当前文档的标题，点击跳转到对应位置。
+/// 长文档（几百页的笔记/题库）没有它只能靠滚轮硬翻。
+class OutlinePanel extends StatelessWidget {
+  final AppState state;
+  const OutlinePanel({super.key, required this.state});
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context);
+    final tab = state.active;
+    final doc = tab?.doc;
+    if (tab == null || doc == null) {
+      return Center(
+        child: Text('打开一篇文档后显示大纲',
+            style: TextStyle(fontSize: 12.5, color: t.hintColor)),
+      );
+    }
+    final items = outlineOf(doc);
+    if (items.isEmpty) {
+      return Center(
+        child: Text('本文档没有标题',
+            style: TextStyle(fontSize: 12.5, color: t.hintColor)),
+      );
+    }
+    return Column(
+      children: [
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(12, 9, 12, 7),
+          child: Text(
+            '${tab.name} · ${items.length} 个标题',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.only(bottom: 12),
+            itemCount: items.length,
+            itemBuilder: (context, i) {
+              final it = items[i];
+              return InkWell(
+                onTap: () => state.seekToBlock(it.blockIndex),
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    left: 10.0 + (it.level - 1).clamp(0, 5) * 12,
+                    right: 8,
+                    top: 5,
+                    bottom: 5,
+                  ),
+                  child: Text(
+                    it.text,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: it.level <= 2 ? 12.5 : 12,
+                      fontWeight:
+                          it.level <= 2 ? FontWeight.w600 : FontWeight.w400,
+                      color: it.level <= 2
+                          ? t.colorScheme.onSurface
+                          : t.hintColor,
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ------------------------------------------------------------------ 快速打开（Ctrl+P）
+
+/// 打开「快速打开」对话框：模糊匹配当前文件夹里的所有文档。
+Future<void> showQuickOpen(BuildContext context, AppState state) {
+  return showDialog<void>(
+    context: context,
+    builder: (_) => QuickOpenDialog(state: state),
+  );
+}
+
+class QuickOpenDialog extends StatefulWidget {
+  final AppState state;
+  const QuickOpenDialog({super.key, required this.state});
+
+  @override
+  State<QuickOpenDialog> createState() => _QuickOpenDialogState();
+}
+
+class _QuickOpenDialogState extends State<QuickOpenDialog> {
+  final _ctl = TextEditingController();
+  final _focus = FocusNode();
+
+  /// 全部文件（打开对话框时拍平一次，不随输入变化）
+  late final List<TreeNode> _all = widget.state.flatFiles();
+  String _q = '';
+  int _selected = 0;
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  /// 朴素但好用的匹配：文件名优先（前缀 > 包含），路径兜底；
+  /// 多个空格分隔的词必须全部命中（"民法 代理" 能筛 "16-民法·民事法律行为与代理.md"）
+  List<TreeNode> get _matches {
+    final q = _q.trim().toLowerCase();
+    if (q.isEmpty) return _all.take(50).toList();
+    final terms = q.split(RegExp(r'\s+')).where((e) => e.isNotEmpty).toList();
+    bool hit(String text) {
+      final l = text.toLowerCase();
+      return terms.every(l.contains);
+    }
+
+    final scored = <(int, TreeNode)>[];
+    for (final n in _all) {
+      final name = n.name.toLowerCase();
+      if (hit(n.name)) {
+        // 名字命中：前缀命中排最前，越短越靠前
+        final prefix = terms.every(name.startsWith) ? 0 : 1;
+        scored.add((prefix * 100000 + name.length, n));
+      } else if (hit(n.path)) {
+        scored.add((200000 + n.path.length, n));
+      }
+    }
+    scored.sort((a, b) => a.$1.compareTo(b.$1));
+    return scored.take(50).map((e) => e.$2).toList();
+  }
+
+  void _open(TreeNode n) {
+    Navigator.of(context).pop();
+    widget.state.openTab(n.path);
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent e) {
+    if (e is! KeyDownEvent) return KeyEventResult.ignored;
+    final m = _matches;
+    if (e.logicalKey == LogicalKeyboardKey.arrowDown) {
+      setState(() => _selected = (_selected + 1).clamp(0, m.length - 1));
+      return KeyEventResult.handled;
+    }
+    if (e.logicalKey == LogicalKeyboardKey.arrowUp) {
+      setState(() => _selected = (_selected - 1).clamp(0, m.length - 1));
+      return KeyEventResult.handled;
+    }
+    if (e.logicalKey == LogicalKeyboardKey.enter && m.isNotEmpty) {
+      _open(m[_selected.clamp(0, m.length - 1)]);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context);
+    final m = _matches;
+    if (_selected >= m.length) _selected = m.isEmpty ? 0 : m.length - 1;
+    final root = widget.state.root ?? '';
+    return Dialog(
+      alignment: Alignment.topCenter,
+      insetPadding: const EdgeInsets.only(top: 90, left: 24, right: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560, maxHeight: 430),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+              child: Focus(
+                onKeyEvent: _onKey,
+                child: TextField(
+                  controller: _ctl,
+                  focusNode: _focus,
+                  autofocus: true,
+                  onChanged: (v) => setState(() {
+                    _q = v;
+                    _selected = 0;
+                  }),
+                  decoration: InputDecoration(
+                    hintText: '输入文件名快速打开（${_all.length} 篇文档）…',
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.bolt, size: 18),
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+              ),
+            ),
+            Flexible(
+              child: m.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Text('没有匹配「$_q」的文档',
+                          style: TextStyle(fontSize: 12.5, color: t.hintColor)),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: m.length,
+                      itemBuilder: (context, i) {
+                        final n = m[i];
+                        final sel = i == _selected;
+                        final rel = n.path.startsWith('$root/')
+                            ? n.path.substring(root.length + 1)
+                            : n.path;
+                        return InkWell(
+                          onTap: () => _open(n),
+                          child: Container(
+                            color: sel
+                                ? t.colorScheme.primaryContainer
+                                    .withValues(alpha: 0.5)
+                                : null,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 14, vertical: 7),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  n.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: sel
+                                        ? FontWeight.w600
+                                        : FontWeight.w400,
+                                  ),
+                                ),
+                                Text(
+                                  rel,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                      fontSize: 11, color: t.hintColor),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: t.dividerColor)),
+              ),
+              child: Text(
+                '↑↓ 选择 · Enter 打开 · Esc 关闭',
+                style: TextStyle(fontSize: 11, color: t.hintColor),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

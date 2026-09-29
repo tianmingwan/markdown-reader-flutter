@@ -26,6 +26,9 @@ class AiWebView {
   static bool _pendingSubmit = false;
   static const String kRootUrl = 'https://chat.deepseek.com/';
 
+  /// 「新对话」要导航到的站点根路径（跟随 AppState.aiBaseUrl，默认可换站点）
+  static String _baseUrl = kRootUrl;
+
   /// 页面加载状态回调（与 Linux 侧同名同语义）
   static void Function(AiLoadEvent event)? onLoadChanged;
 
@@ -48,6 +51,7 @@ class AiWebView {
   /// 控制器是静态的：面板关掉再打开时不重新加载，页面状态（对话内容、滚动位置）
   /// 与登录态都留着，和 Linux 侧的「只隐藏不销毁」行为对齐。
   static WebViewController ensure(String url) {
+    _baseUrl = url;
     final existing = _controller;
     if (existing != null) {
       if (_loadedUrl != url) {
@@ -100,12 +104,12 @@ class AiWebView {
     await _controller?.reload();
   }
 
-  /// 开一个新对话：回到聊天首页（DeepSeek 的 SPA 会在根路径开新会话）
+  /// 开一个新对话：回到聊天首页（多数 AI 站点的 SPA 会在根路径开新会话）
   static void newChat() {
     final c = _controller;
-    _loadedUrl = kRootUrl;
+    _loadedUrl = _baseUrl;
     if (c == null) return;
-    c.loadRequest(Uri.parse(kRootUrl));
+    c.loadRequest(Uri.parse(_baseUrl));
   }
 
   /// 开新对话并把文本放进去；[submit] 为 true 时顺便发出去（直接提问）

@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path_provider/path_provider.dart';
 
 import 'models.dart';
@@ -231,6 +232,10 @@ class NativeCore {
   static String configDir() => _cfgDir ?? _envConfigDir();
 
   static String? _cfgDir;
+
+  /// 仅测试用：把会话目录指到临时目录，避免测试写坏真实 session.json
+  @visibleForTesting
+  static set configDirOverride(String? v) => _cfgDir = v;
 
   /// 启动时调一次：解析出真正可写的配置目录（移动端走应用私有目录）。
   static Future<String> resolveConfigDir() async {

@@ -12,6 +12,13 @@ import 'package:flutter/services.dart';
 
 import '../ai/ai_types.dart';
 
+/// open 的应答：面板是否可用 + 网页是否早已就绪（重开面板时关键）
+class AiOpenResult {
+  final bool ok;
+  final bool pageReady;
+  const AiOpenResult({required this.ok, required this.pageReady});
+}
+
 class AiPanelNative {
   AiPanelNative._();
 
@@ -63,41 +70,59 @@ class AiPanelNative {
     });
   }
 
-  /// 打开（或重新摆放）面板。返回 false = 原生没有内嵌能力。
+  /// 打开（或重新摆放）面板。
   ///
-  /// [rect] 是**设备像素**（Dart 负责乘 devicePixelRatio），原点与 Flutter
-  /// 视图一致（GTK 里 Flutter 视图正好占满窗口客户区）。
-  static Future<bool> open({
+  /// [rect] 是**逻辑像素**（与 GTK 的应用像素同单位：Flutter 视图坐标与
+  /// GtkOverlay 子件的 margin/size-request 都未乘缩放因子，HiDPI 的缩放由
+  /// GDK 在窗口层统一处理，这里再乘 devicePixelRatio 会把网页推出窗口）。
+  ///
+  /// 返回 [AiOpenResult]：ok=false 表示原生没有内嵌能力；pageReady 表示网页
+  /// 早已加载完（重开面板时不会再有加载事件，Dart 据此直接置就绪态）。
+  static Future<AiOpenResult> open({
     required Rect rect,
     required String dataDir,
     required String cacheDir,
+    String? url,
     String? prompt,
   }) async {
     _installHandler();
     if (!platformSupported) {
       availability = AiPaneAvailability.unsupported;
-      return false;
+      return const AiOpenResult(ok: false, pageReady: false);
     }
     try {
-      final ok = await channel.invokeMethod<bool>('open', <String, Object?>{
+      final r = await channel.invokeMethod<Object?>('open', <String, Object?>{
         ..._rectArgs(rect),
         'dataDir': dataDir,
         'cacheDir': cacheDir,
+        if (url != null && url.isNotEmpty) 'url': url,
         if (prompt != null && prompt.trim().isNotEmpty) 'prompt': prompt,
       });
+      // 新版原生回 {ok, pageReady}；旧版只回 bool（视为 ok，pageReady 未知）
+      final ok = r == true || (r is Map && r['ok'] == true);
+      final pageReady = r is Map && r['pageReady'] == true;
       availability =
-          ok == true ? AiPaneAvailability.ready : AiPaneAvailability.unsupported;
-      return ok == true;
+          ok ? AiPaneAvailability.ready : AiPaneAvailability.unsupported;
+      return AiOpenResult(ok: ok, pageReady: pageReady);
     } on MissingPluginException {
       // 例如旧构建 / 非 Linux 平台
       availability = AiPaneAvailability.unsupported;
-      return false;
+      return const AiOpenResult(ok: false, pageReady: false);
     } on PlatformException catch (e) {
       availability = e.code == 'unsupported'
           ? AiPaneAvailability.unsupported
           : availability;
-      return false;
+      return const AiOpenResult(ok: false, pageReady: false);
     }
+  }
+
+  /// 整页切换到另一个站点（用户在设置里换了 AI 站点）
+  static Future<void> loadUrl(String url) async {
+    if (!platformSupported) return;
+    try {
+      await channel
+          .invokeMethod<void>('loadUrl', <String, Object?>{'url': url});
+    } catch (_) {}
   }
 
   /// 只更新位置尺寸（拖动分栏、窗口缩放时高频调用，失败可以忽略）。

@@ -60,7 +60,8 @@ class AiPanel {
   GtkWidget* webview_ = nullptr;
   FlMethodChannel* channel_ = nullptr;
 
-  // Dart 给的矩形（GTK 设备像素）
+  // Dart 给的矩形（应用像素 = 逻辑坐标：GtkOverlay 子件的 margin/size-request
+  // 用的就是这个单位，缩放因子由 GDK 在窗口层处理，双方都不乘）
   int x_ = 0;
   int y_ = 0;
   int width_ = 0;

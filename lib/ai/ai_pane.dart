@@ -57,6 +57,9 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
   late final AiBackendKind _backend = widget.backendOverride ?? detectAiBackend();
   bool get _isNative => _backend == AiBackendKind.nativeOverlay;
 
+  /// 已让网页加载的站点 URL：与 state.aiBaseUrl 不一致时触发整页切换
+  String _loadedBaseUrl = kDeepSeekUrl;
+
   /// Linux：原生网页是否已经建好（第一次 open 成功后为 true，之后只更新矩形）
   bool _opened = false;
   bool _unsupported = false;
@@ -83,6 +86,7 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     _unsupported = _backend == AiBackendKind.external;
+    _loadedBaseUrl = s.aiBaseUrl;
     if (_backend == AiBackendKind.inAppWebView) {
       AiWebView.onLoadChanged = _onLoadChanged;
       AiWebView.onPromptResult = _onPromptResult;
@@ -145,10 +149,32 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
   @override
   void didUpdateWidget(covariant AiPane old) {
     super.didUpdateWidget(old);
+    if (s.aiBaseUrl != _loadedBaseUrl) {
+      _loadedBaseUrl = s.aiBaseUrl;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _switchBaseUrl());
+    }
     if (_isNative) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _syncNative());
     }
     WidgetsBinding.instance.addPostFrameCallback((_) => _consumePendingAsk());
+  }
+
+  /// 用户在菜单里换了 AI 站点：整页导航（对话/登录态由站点各自的 storage 决定）
+  Future<void> _switchBaseUrl() async {
+    setState(() => _loadState = 'loading');
+    if (_backend == AiBackendKind.inAppWebView) {
+      AiWebView.ensure(s.aiBaseUrl); // ensure 内部已处理 URL 变化时的导航
+    } else if (_isNative) {
+      await AiPanelNative.loadUrl(s.aiBaseUrl);
+    }
+  }
+
+  /// 当前站点名（菜单勾选 / 占位文案用）；自定义 URL 显示主机名
+  String get _siteName {
+    for (final e in AppState.aiSites.entries) {
+      if (e.value == s.aiBaseUrl) return e.key;
+    }
+    return Uri.tryParse(s.aiBaseUrl)?.host ?? s.aiBaseUrl;
   }
 
   /// 处理"选中内容 → 内置 AI"的请求（由 AppState.askAi 投递）。
@@ -160,7 +186,7 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
     if (ask == null) return;
 
     if (_backend == AiBackendKind.inAppWebView) {
-      AiWebView.ensure(kDeepSeekUrl);
+      AiWebView.ensure(s.aiBaseUrl);
       // 新对话要先导航，填内容由 webview 在 onPageFinished 后补上
       AiWebView.askInNewChat(ask.text, submit: ask.submit);
       // submit 的成败由 onSubmitResult 复查后如实提示
@@ -198,7 +224,7 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
   void _ensureInAppWebView() {
     if (!mounted) return;
     final existed = AiWebView.hasController;
-    AiWebView.ensure(kDeepSeekUrl);
+    AiWebView.ensure(s.aiBaseUrl);
     if (!existed) {
       setState(() => _loadState = 'loading');
     }
@@ -206,26 +232,29 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
 
   // ---------------------------------------------------------- 原生同步（Linux）
 
-  /// 占位区在窗口里的矩形，换算成设备像素（GTK 侧用的单位）。
-  Rect? _hostRectPx() {
+  /// 占位区在窗口里的矩形（**逻辑像素**，与 GTK 的应用像素是同一坐标系：
+  /// Flutter 视图的布局坐标与 GtkOverlay 子件的 margin/size-request 一样，
+  /// 都是未乘缩放因子的单位，缩放由 GDK 在窗口层统一处理）。
+  ///
+  /// 注意千万不要再乘 devicePixelRatio：4K/HiDPI（scale=2）下矩形会被放大
+  /// 两倍，右侧分栏的 x 翻倍后整个网页被推出窗口可见区，只剩「正在调整宽度…」。
+  Rect? _hostRect() {
     final box = _hostKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return null;
     final origin = box.localToGlobal(Offset.zero);
-    final dpr = View.of(context).devicePixelRatio;
     return Rect.fromLTWH(
-      origin.dx * dpr,
-      origin.dy * dpr,
-      box.size.width * dpr,
-      box.size.height * dpr,
+      origin.dx,
+      origin.dy,
+      box.size.width,
+      box.size.height,
     );
   }
 
   Future<void> _syncNative() async {
     if (!mounted || !_isNative) return;
-    final rect = _hostRectPx();
+    final rect = _hostRect();
     if (rect == null) return;
 
-    final want = s.aiNativeVisible && (_everReady || _loadState == 'ready');
     if (rect.width < 40 || rect.height < 40) {
       if (_nativeVisible) {
         _nativeVisible = false;
@@ -238,13 +267,14 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
       _opened = true;
       _lastSentRect = rect;
       final cfg = NativeCore.configDir();
-      final ok = await AiPanelNative.open(
+      final res = await AiPanelNative.open(
         rect: rect,
         dataDir: '$cfg/webview',
         cacheDir: '$cfg/webview-cache',
+        url: s.aiBaseUrl,
       );
       if (!mounted) return;
-      if (!ok) {
+      if (!res.ok) {
         setState(() {
           _unsupported = true;
           s.showToast('内嵌网页不可用，已提供「用浏览器打开」');
@@ -253,7 +283,10 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
       }
       setState(() {
         _unsupported = false;
-        _loadState = 'loading';
+        // 重开面板时网页可能早就加载完（不会再有加载事件），
+        // 原生在 open 应答里带回 pageReady，避免状态永远停在 loading
+        _loadState = res.pageReady ? 'ready' : 'loading';
+        _everReady = _everReady || res.pageReady;
       });
       // 面板建好了才能把"问 AI"请求交给原生
       WidgetsBinding.instance.addPostFrameCallback((_) => _consumePendingAsk());
@@ -263,6 +296,9 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
     }
 
     if (!mounted) return;
+    // want 必须在 await 之后现算：open/setBounds 期间 ready 事件可能已经到了，
+    // 用在 await 之前算好的旧值会把刚就绪的网页再藏起来
+    final want = s.aiNativeVisible && (_everReady || _loadState == 'ready');
     if (want != _nativeVisible) {
       _nativeVisible = want;
       await AiPanelNative.setVisible(want);
@@ -352,7 +388,7 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
   }
 
   void _openExternal() {
-    launchUrl(Uri.parse(kDeepSeekUrl), mode: LaunchMode.externalApplication);
+    launchUrl(Uri.parse(s.aiBaseUrl), mode: LaunchMode.externalApplication);
   }
 
   Future<void> _zoomBy(double delta) async {
@@ -508,6 +544,10 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
       splashRadius: 14,
       icon: const Icon(Icons.more_vert, size: 15),
       onSelected: (v) {
+        if (v.startsWith('site:')) {
+          s.setAiBaseUrl(v.substring(5));
+          return;
+        }
         switch (v) {
           case 'ask':
             final sel = s.selectionText;
@@ -556,6 +596,14 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
                 Text(has ? '新对话 + 只放进输入框（$preview）' : '新对话 + 只放进输入框（先选中文字）'),
           ),
           const PopupMenuDivider(),
+          // 站点切换：整页重新加载，登录态由各站点自己的 storage 保存
+          for (final e in AppState.aiSites.entries)
+            CheckedPopupMenuItem(
+              value: 'site:${e.value}',
+              checked: s.aiBaseUrl == e.value,
+              child: Text('站点：${e.key}'),
+            ),
+          const PopupMenuDivider(),
           const PopupMenuItem(value: 'zoom-in', child: Text('放大网页')),
           const PopupMenuItem(value: 'zoom-out', child: Text('缩小网页')),
           const PopupMenuItem(value: 'external', child: Text('在系统浏览器打开')),
@@ -587,7 +635,7 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
     if (_unsupported) {
       return _placeholder(
         icon: Icons.public_off,
-        title: '这里本应内嵌 DeepSeek 对话',
+        title: '这里本应内嵌 $_siteName 对话',
         body: Platform.isLinux
             ? '本次构建没有编译 WebKitGTK 支持（缺 libwebkit2gtk-4.1-dev）。\n'
                 '点下面的按钮用系统浏览器打开，登录态由浏览器自己记着。'
@@ -596,7 +644,7 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
         action: FilledButton.icon(
           onPressed: _openExternal,
           icon: const Icon(Icons.open_in_new, size: 16),
-          label: const Text('用系统浏览器打开 DeepSeek'),
+          label: Text('用系统浏览器打开 $_siteName'),
         ),
       );
     }
@@ -604,7 +652,7 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
       icon: Icons.cloud_off,
       title: '网页加载失败',
       body: '${_loadError ?? ''}\n'
-          '（DeepSeek 打不开时，本机代理 / 网络往往是原因）',
+          '（$_siteName 打不开时，本机代理 / 网络往往是原因）',
       action: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
@@ -629,7 +677,7 @@ class _AiPaneState extends State<AiPane> with WidgetsBindingObserver {
     final t = Theme.of(context);
     return _placeholder(
       icon: null,
-      title: _loadState == 'ready' ? '正在调整宽度…' : '正在打开 DeepSeek…',
+      title: _loadState == 'ready' ? '正在调整宽度…' : '正在打开 $_siteName…',
       body: _loadState == 'ready'
           ? null
           : '首次使用需要登录；登录态保存在本机，之后打开即用。',

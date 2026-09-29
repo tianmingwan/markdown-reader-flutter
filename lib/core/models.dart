@@ -330,6 +330,22 @@ class RootRef {
   Map<String, Object?> toJson() => {'kind': kind, 'loc': loc};
 }
 
+/// 一个文件夹（root）的工作区快照：切走时记下打开的标签组与活动标签，
+/// 切回来时原样恢复（VS Code 的 per-folder workspace 记忆）。
+class RootWorkspace {
+  List<String> tabs;
+  String? active;
+  RootWorkspace({List<String>? tabs, this.active})
+      : tabs = tabs ?? <String>[];
+
+  factory RootWorkspace.fromJson(Map<String, Object?> m) => RootWorkspace(
+        tabs: (m['tabs'] as List? ?? const []).map((e) => e as String).toList(),
+        active: m['active'] as String?,
+      );
+
+  Map<String, Object?> toJson() => {'tabs': tabs, 'active': active};
+}
+
 class SessionData {
   List<RootRef> recentRoots;
   RootRef? lastRoot;
@@ -343,17 +359,27 @@ class SessionData {
   bool? aiPanelOpen;
   int? aiPanelWidth;
 
+  /// AI 面板加载的站点（默认 DeepSeek，可换 Kimi/豆包等）
+  String? aiBaseUrl;
+
+  /// 每个文件夹各自的工作区（打开的哪些标签、活动标签是谁），键为 root 路径
+  Map<String, RootWorkspace> workspaces;
+
   SessionData({
-    this.recentRoots = const [],
+    List<RootRef>? recentRoots,
     this.lastRoot,
     this.lastFile,
-    this.filePositions = const {},
+    Map<String, double>? filePositions,
     this.theme,
     this.fontSize,
     this.sortMode,
     this.aiPanelOpen,
     this.aiPanelWidth,
-  });
+    this.aiBaseUrl,
+    Map<String, RootWorkspace>? workspaces,
+  })  : recentRoots = recentRoots ?? <RootRef>[],
+        filePositions = filePositions ?? <String, double>{},
+        workspaces = workspaces ?? <String, RootWorkspace>{};
 
   factory SessionData.fromJson(Map<String, Object?> m) => SessionData(
         recentRoots: (m['recentRoots'] as List? ?? const [])
@@ -370,6 +396,11 @@ class SessionData {
         sortMode: m['sortMode'] as String?,
         aiPanelOpen: m['aiPanelOpen'] as bool?,
         aiPanelWidth: (m['aiPanelWidth'] as num?)?.toInt(),
+        aiBaseUrl: m['aiBaseUrl'] as String?,
+        workspaces: ((m['workspaces'] as Map?) ?? const {}).map(
+          (k, v) => MapEntry(k as String,
+              RootWorkspace.fromJson((v as Map).cast<String, Object?>())),
+        ),
       );
 
   Map<String, Object?> toJson() => {
@@ -382,6 +413,8 @@ class SessionData {
         'sortMode': sortMode,
         'aiPanelOpen': aiPanelOpen,
         'aiPanelWidth': aiPanelWidth,
+        'aiBaseUrl': aiBaseUrl,
+        'workspaces': workspaces.map((k, v) => MapEntry(k, v.toJson())),
       };
 }
 

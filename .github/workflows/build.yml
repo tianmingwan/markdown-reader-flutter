@@ -52,9 +52,27 @@ jobs:
           tar czf "$GITHUB_WORKSPACE/mdreader-flutter-linux-x64.tar.gz" .
 
       - name: 生成 deb 安装包
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          VER="${{ github.ref_type == 'tag' && github.ref_name || '0.1.0' }}"
-          ./scripts/build-deb.sh "${VER#v}"
+          # 版本号：打标签时取标签名（v0.3.0 → 0.3.0），分支推送时回退到 pubspec.yaml
+          # 的 version 字段（0.3.0+6 → 0.3.0）。
+          # 此前这里硬编码回退成 0.1.0，导致普通分支构建出的 deb 包名与 Version 字段
+          # 跟项目实际版本不符（pubspec 早就 0.3.0 了，包却叫 0.1.0）。
+          if [ "$REF_TYPE" = "tag" ]; then
+            VER="$REF_NAME"
+          else
+            VER="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -1)"
+          fi
+          VER="${VER#v}"    # 去掉可能的前缀 v
+          VER="${VER%%+*}"  # 去掉 +build 号
+          if [ -z "$VER" ]; then
+            echo "无法从 pubspec.yaml 解析版本号" >&2
+            exit 1
+          fi
+          echo "deb 版本号：$VER"
+          ./scripts/build-deb.sh "$VER"
 
       - uses: actions/upload-artifact@v4
         with:

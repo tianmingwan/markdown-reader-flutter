@@ -77,5 +77,36 @@ void main() {
       expect(s.searchOpen, isFalse);
       expect(s.highlightQuery, isNull);
     });
+
+    testWidgets('Ctrl+P 打开快速打开对话框', (t) async {
+      final s = AppState()..root = '/x';
+      await t.pumpWidget(host(s));
+      await t.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await t.sendKeyEvent(LogicalKeyboardKey.keyP);
+      await t.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await t.pumpAndSettle();
+      expect(find.byType(QuickOpenDialog), findsOneWidget);
+    });
+
+    testWidgets('Ctrl+P 没打开文件夹时不弹对话框', (t) async {
+      final s = AppState();
+      await t.pumpWidget(host(s));
+      await t.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await t.sendKeyEvent(LogicalKeyboardKey.keyP);
+      await t.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await t.pumpAndSettle();
+      expect(find.byType(QuickOpenDialog), findsNothing);
+    });
+
+    testWidgets('Ctrl+W 无标签时不动作', (t) async {
+      final s = AppState();
+      await t.pumpWidget(host(s));
+      await t.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await t.sendKeyEvent(LogicalKeyboardKey.keyW);
+      await t.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await t.pumpAndSettle();
+      expect(s.tabs, isEmpty);
+      expect(s.activeIndex, -1);
+    });
   });
 }

@@ -128,6 +128,7 @@ dpkg-deb --build --root-owner-group <debroot> dist/mdreader-flutter_0.1.0_amd64.
 | `MDREADER_CORE_SO=<路径>` | 指定 Rust 动态库位置 |
 | `MDREADER_SEARCH=<关键词>` | 启动即打开搜索面板并执行一次搜索（自动化验证用） |
 | `MDREADER_AI=1` | 启动即打开右侧 AI 搜索分栏（自动化验证用，等价于手动开启） |
+| `MDREADER_OUTLINE=1` | 启动即打开大纲面板（自动化验证用） |
 | `MDREADER_HL=<关键词>` | 只设置正文高亮词、不开搜索面板（等价于「搜完收起面板」的状态） |
 | `MDREADER_SELFTEST=1` | 打印渲染统计后退出 |
 | `MDREADER_PERF=1` | 打印打开耗时与帧统计后退出 |
@@ -196,7 +197,7 @@ dpkg-deb --build --root-owner-group <debroot> dist/mdreader-flutter_0.1.0_amd64.
 ```
 Linux 路径（Dart 决定布局，原生只负责贴上去）
   分栏宽度 / 拖动 / 显隐                       GtkOverlay 的叠加子件
-  占位区矩形 → ×devicePixelRatio  → MethodChannel → gtk margin + size_request
+  占位区矩形（逻辑像素）       → MethodChannel → gtk margin + size_request
   头部操作（带入选中 / 刷新 / 缩放 / 清登录态） →  reload / evaluate_javascript / clear data
   浮层遮挡、拖动时让位                          （网页永远盖在 Flutter 之上，必须先藏）
 ```
@@ -208,8 +209,12 @@ Linux 路径（Dart 决定布局，原生只负责贴上去）
 2. **网页是独立的原生窗口，会吃掉指针事件**——拖动分栏期间、以及 Flutter 弹菜单/对话框
    期间（用 `NavigatorObserver` 感知浮层层数），都必须先把网页藏起来，否则分栏「粘住」、
    菜单被盖住。
-3. **坐标要按设备像素给**（GTK 用设备像素，Flutter 用逻辑像素），Dart 侧乘
-   `devicePixelRatio` 后下发；窗口缩放、侧栏折叠、拖动分栏都会重算并重新贴合。
+3. **坐标一律用逻辑像素（应用像素），双方都不得乘缩放因子**——Flutter 视图的布局坐标与
+   GtkOverlay 子件的 margin/size-request 是同一单位，HiDPI 的缩放由 GDK 在窗口层统一处理。
+   ⚠️ 这里踩过大坑（v0.2.x 一直带著）：早期 Dart 侧乘了 `devicePixelRatio` 下发，
+   scale=1 的显示器上恰好不出错，一到 4K/HiDPI（scale=2）矩形就被放大两倍，
+   分栏在窗口右侧、x 翻倍后整个网页被推出窗口可见区——页面明明加载成功，
+   用户却只看到「正在调整宽度…」。窗口缩放、侧栏折叠、拖动分栏都会重算并重新贴合。
 
 ### 登录态与隐私
 
@@ -339,6 +344,13 @@ Linux 路径（Dart 决定布局，原生只负责贴上去）
 | 状态栏（路径/字数/进度）、最近打开 | ✅ |
 | 本地图片、相对链接应用内打开、http 走系统浏览器 | ✅ |
 | 表格 / 任务列表 / 删除线 / 引用 / 分隔线 | ✅ |
+| **渲染改版（v0.3.0）**：标题六级字号阶梯 + h1/h2 分隔线、引用块底色+左边条、代码块头部栏（语言+一键复制）+ 长行横向滚动、表格斑马纹、任务勾选上色、图片圆角边框+说明文字、正文列宽上限 880px | ✅ |
+| **最近打开的文件夹**：工具栏文件夹按钮下拉直达（不再只藏欢迎页）；不存在的目录置灰 | ✅ v0.3.0 |
+| **按文件夹记忆工作区**：换文件夹记住各自的标签组+活动标签，切回原样恢复（滚动位置原本就按文件夹记） | ✅ v0.3.0 |
+| **快速打开 `Ctrl+P`**：模糊匹配当前文件夹全部文档（多词与匹配、文件名优先），↑↓ 选择 Enter 打开 | ✅ v0.3.0 |
+| **大纲面板**：按标题层级列出，点击跳转（多轮收敛近似定位）；与搜索面板互斥共用侧栏 | ✅ v0.3.0 |
+| 标签：中键关闭、`Ctrl+W` 关当前标签、悬停显示完整路径 | ✅ v0.3.0 |
+| AI 面板**站点切换**（DeepSeek / Kimi / 豆包 / ChatGPT，记忆选择） | ✅ v0.3.0 |
 | 数学公式 | ⚠️ **占位样式**（斜体+主题色）。接入点见 `inline_render.dart` 的 `_pushTextWithMath` |
 | Mermaid 图表 | ⚠️ **降级为源码视图**（带标题与代码框）。`block_render.dart` 的 `_MermaidFallback` 是接入点 |
 | 手写笔批注 | ❌ 按需求移除（原 `ink.ts` 723 行） |
@@ -354,17 +366,26 @@ Linux 路径（Dart 决定布局，原生只负责贴上去）
 
 - **Rust core**：31 个单测（原有 28 + 新增 `session.rs` 2 个：老会话文件缺 `aiPanel*` 字段仍可读、
   AI 面板字段读写往返）
-- **Dart/Flutter**：66 个测试
-  - `test/ai_pane_test.dart`（17）：原生通道协议（设备像素矩形/数据目录/unsupported 降级/
-    事件回调）、面板宽度夹紧与会话写回、浮层与拖动时让位、选区 notifier 不触发全局重建、
-    降级 UI 与「带入提问框」按钮状态、三端承载方式判定、注入脚本转义
+- **Dart/Flutter**：85 个测试
+  - `test/ai_pane_test.dart`（19）：原生通道协议（逻辑像素矩形/数据目录/pageReady 应答/loadUrl/
+    unsupported 降级/事件回调）、面板宽度夹紧与会话写回、浮层与拖动时让位、选区 notifier
+    不触发全局重建、降级 UI 与「带入提问框」按钮状态、三端承载方式判定、注入脚本转义
+  - `test/workspace_test.dart`（2，真实 `.so` + 临时目录）：换文件夹记住标签组并恢复活动标签、
+    最近打开列表去重置顶
+  - `test/features_test.dart`（5）：会话模型新字段 JSON 往返、旧版会话兼容、大纲抽取、
+    内联拍平、快速打开多词过滤
   - 搜索高亮 6 例：多处命中、大小写不敏感、空查询不高亮、切分不丢字、正文高亮样式、未开启时渲染不变
-  - 快捷键与高亮生命周期 5 例（用真实按键事件驱动）：`Ctrl+F` 开面板、`Esc` 两级语义、
-    `closeSearch`/`toggleSearch` 保留高亮、无高亮时按 Esc 无副作用
+  - 快捷键与高亮生命周期 8 例（用真实按键事件驱动）：`Ctrl+F` 开面板、`Esc` 两级语义、
+    `closeSearch`/`toggleSearch` 保留高亮、无高亮时按 Esc 无副作用、`Ctrl+P` 快速打开、
+    `Ctrl+W` 关标签
   - `test/native_test.dart`（12）：真实 `.so` 端到端 —— 渲染、高亮 token、折叠块、mermaid、公式标记、
     图片与链接改写、目录扫描（跳过噪音目录）、中文全文搜索、会话读写往返、缺失文件不崩
   - `test/models_test.dart`（17）：自然排序、6 种排序模式、块/内联 JSON 解析、未知类型降级、惰性解析、会话往返
   - `test/render_test.dart`（18）：标题/段落/代码/表格/列表/引用渲染、折叠交互与状态外持、链接回调、Mermaid 降级、字号生效、搜索高亮
+
+> 注意：凡是创建 `AppState` 的测试都要把 `NativeCore.configDirOverride` 指到临时目录——
+> 会话保存有 800ms 防抖，不设覆盖的话测试会把几乎空白的会话写进真实的
+> `~/.config/com.chensdong.mdreader/session.json`（这个坑真实发生过）。
 
 ## 已知缺口（按优先级）
 
