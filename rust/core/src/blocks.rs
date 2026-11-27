@@ -378,6 +378,11 @@ impl<'a> Parser0<'a> {
                     self.i += 1;
                     out.push(Block::Hr);
                 }
+                // Start/End(HtmlBlock) 必须显式消费：否则会掉进兜底分支交给 inlines()，
+                // 而 inlines() 不认这两个事件，会一路吃到 End(_)，把它后面的块全吞掉。
+                Event::Start(Tag::HtmlBlock) | Event::End(TagEnd::HtmlBlock) => {
+                    self.i += 1;
+                }
                 Event::Html(h) | Event::InlineHtml(h) => {
                     let raw = h.to_string();
                     self.i += 1;
@@ -572,6 +577,36 @@ fn strip_summary(html: &str) -> String {
     html.to_string()
 }
 
+/// 删除所有 `<!-- ... -->` 注释（含未闭合的情形：从 `<!--` 一直删到文末 / 删到 `-->`）。
+/// 未闭合时删到 `-->` 或文末，保证不会把后面的正文一起吞掉。
+fn strip_html_comments(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+    let mut last = 0usize;
+    while i + 3 < bytes.len() {
+        if &bytes[i..i + 4] == b"<!--" {
+            out.push_str(&src[last..i]);
+            match src[i + 4..].find("-->") {
+                Some(rel) => {
+                    i = i + 4 + rel + 3;
+                }
+                None => {
+                    // 未闭合：删到文末
+                    i = src.len();
+                }
+            }
+            last = i;
+        } else {
+            i += 1;
+        }
+    }
+    if last < src.len() {
+        out.push_str(&src[last..]);
+    }
+    out
+}
+
 /// 极简去标签（原始 HTML 降级为纯文本时的兜底）
 fn strip_tags(html: &str) -> String {
     let mut out = String::with_capacity(html.len());
@@ -595,6 +630,14 @@ fn strip_tags(html: &str) -> String {
 
 /// 渲染入口（结构化）。
 pub fn render_blocks(source: &str, base_dir: &str, dark: bool) -> RenderedDoc {
+    // HTML 注释必须先行剔除。pulldown-cmark 把 `<!-- ... -->` 包成
+    // Start(HtmlBlock) + Html + End(HtmlBlock)；blocks() 的兜底分支碰到 Start(_) 会走
+    // inlines()，而 inlines() 只认 Event::Html、不认 Start/End(HtmlBlock)，于是一路吃到
+    // End(_) 才停 —— 注释之后的全文被整段吞掉（本仓库用行内注释标注"存疑"的文档全部中招）。
+    // 注释本身也不该出现在成稿里，直接删干净。
+    let cleaned = strip_html_comments(source);
+    let source: &str = &cleaned;
+
     let has_math = source.contains('$');
     let has_mermaid = source.contains("```mermaid");
     let words = source.chars().filter(|c| !c.is_whitespace()).count();
@@ -743,6 +786,39 @@ mod tests {
 
     fn r(s: &str) -> Vec<Block> {
         render_blocks(s, "/tmp/base", false).blocks
+    }
+
+    /// 回归：HTML 注释曾导致注释之后的全文被吞掉。
+    /// pulldown-cmark 产出 Start(HtmlBlock)+Html+End(HtmlBlock)，旧兜底分支把
+    /// Start(HtmlBlock) 丢给 inlines()，而 inlines() 一路吃到 End(_) 才停。
+    #[test]
+    fn html_comment_does_not_swallow_following_content() {
+        let b = r("# 前
+正文一。
+
+<!-- 存疑：这里有个注释 -->
+
+## 后
+
+正文二。");
+        let texts: Vec<String> = b.iter().map(|x| format!("{:?}", x)).collect();
+        let joined = texts.join(" ");
+        assert!(joined.contains("前"), "注释前的内容丢了：{}", joined);
+        assert!(joined.contains("后"), "注释后的标题被吞了：{}", joined);
+        assert!(joined.contains("正文二"), "注释后的正文被吞了：{}", joined);
+        // 注释本身不应作为内容出现
+        assert!(!joined.contains("存疑"), "注释文本不该渲染出来：{}", joined);
+    }
+
+    /// 回归：未闭合的 \`<!--\` 只能删到文末，不能把后续正文留在半截状态。
+    #[test]
+    fn unterminated_html_comment_is_safe() {
+        let b = r("可见内容
+
+<!-- 没有闭合
+<!--> 只是文本");
+        let joined = format!("{:?}", b);
+        assert!(joined.contains("可见内容"), "丢弃范围过大：{}", joined);
     }
 
     #[test]
