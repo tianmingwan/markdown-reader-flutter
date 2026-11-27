@@ -74,7 +74,14 @@ macOS `libmdreader_core.dylib`；Android 交给系统从 APK 的 `lib/<abi>/` �
 
 **已发布版本**：
 
-- **v0.3.0**（最新）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.3.0>
+- **v0.3.1**（最新）：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.3.1>
+  —— 修 **HTML 注释会静默吞掉其后全文**：`<!-- ... -->` 被 pulldown-cmark 拆成
+  `Start(HtmlBlock)+Html+End(HtmlBlock)`，而解析器兜底分支把 `Start(HtmlBlock)` 交给
+  `inlines()`，后者不认这两个事件、停止条件永不触发，于是一路读到文档末尾 ——
+  注释之后的标题/正文/表格全部消失且不报错。实测带行内注释的课程笔记里 P9 只显示
+  15%、P10 21%、P14 31%、P8 41%、P13 50%。现改为解析前剔除注释 + 显式消费
+  `HtmlBlock` 事件，并补两个回归测试。
+- v0.3.0：<https://github.com/tianmingwan/markdown-reader-flutter/releases/tag/v0.3.0>
   —— 修 AI 面板在 4K/HiDPI 屏永远停在「正在调整宽度…」（坐标系误乘 `devicePixelRatio`，
   网页被推出窗口可见区）+ Markdown 渲染改版 + 最近文件夹下拉与按文件夹记忆工作区
   + `Ctrl+P` 快速打开 / 大纲面板 / 中键与 `Ctrl+W` 关标签 / AI 面板站点切换。
